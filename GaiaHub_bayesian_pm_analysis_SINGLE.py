@@ -41,6 +41,120 @@ from concurrent.futures import ProcessPoolExecutor
 
 import process_GaiaHub_outputs as process_GH
 
+
+import argparse
+import warnings
+import sys
+warnings.filterwarnings("ignore")
+
+os.environ["OMP_NUM_THREADS"] = "1" # export OMP_NUM_THREADS=4
+os.environ["OPENBLAS_NUM_THREADS"] = "1" # export OPENBLAS_NUM_THREADS=4 
+os.environ["MKL_NUM_THREADS"] = "1" # export MKL_NUM_THREADS=6
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # export VECLIB_MAXIMUM_THREADS=4
+os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
+
+def gaiahub_BPMs(argv):  
+    """
+    Inputs
+    """
+       
+    examples = '''Examples:
+       
+    gaiahub_BPMs --name "Fornax_dSph"
+        
+    '''
+
+    parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter, usage='%(prog)s [options]', 
+                                     description='GaiaHub BPMs computes Bayesian proper motions (PM), parallaxes, and positions by'+\
+                                     ' combining HST and Gaia data.', epilog=examples)
+   
+    # options
+    parser.add_argument('--name', type=str, 
+                        default = 'Output',
+                        help='Name of directory to analyze.')
+    parser.add_argument('--path', type=str, 
+                        default = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/', 
+                        help='Path to GaiaHub results.')
+    parser.add_argument('--overwrite', 
+                        action='store_true',
+                        help = 'Overwrite any previous results.')
+    parser.add_argument('--overwrite_GH', 
+                        action='store_true', 
+                        help = 'Overwrite the GaiaHub summaries used for the Bayesian analysis.')
+    parser.add_argument('--repeat_first_fit', 
+                        action='store_true', 
+                        default=True,
+                        help = 'Repeat the first fit. Useful for getting better measures of sources without Gaia priors. Default True.')
+    parser.add_argument('--plot_indv_star_pms', 
+                        action='store_true', 
+                        default=True,
+                        help = 'Plot the PM measurments for individual stars. Good for diagnostics.')
+    parser.add_argument('--image_names', type=str, 
+                        nargs='+', 
+                        default = "y", 
+                        help='Specify the HST image names to analyze.'+\
+                             ' The default value, "y", will analyze all HST images in a directory (first separately, then combined).'+\
+                             ' The user can also specify image names separated by spaces.')
+    
+    parser.add_argument('--max_iterations', type=int, 
+                        default = 3, 
+                        help='Maximum number of allowed iterations before convergence. Default 3.')
+    parser.add_argument('--max_sources', type=int, 
+                        default = 2000, 
+                        help='Maximum number of allowed sources per image. Default 2000.')
+    parser.add_argument('--max_images', type=int, 
+                        default = 10, 
+                        help='Maximum number of allowed images to be fit together at the same time. Default 10.')
+   
+    if len(argv)==0:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+
+    args = parser.parse_args(argv)
+    field = args.name
+    path = args.path
+    overwrite_previous = args.overwrite
+    overwrite_GH_summaries = args.overwrite_GH
+    image_names = args.image_names
+    n_fit_max = args.max_iterations
+    max_stars = args.max_sources
+    max_images = args.max_images
+    redo_without_outliers = args.repeat_first_fit
+    plot_indv_star_pms = args.plot_indv_star_pms
+    
+    #probably want to figure out how to ask the user for a thresh_time
+    thresh_time = ((datetime.datetime(2023,5,22,15,20,38,259741)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+    if field in ['COSMOS_field']:
+        thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+    
+#    print('image_names',image_names)
+        
+    if (image_names == "y") or (image_names == "Y"):
+        #then analyse all the images in a field along a path
+        all_image_analysis(field,path,
+                           overwrite_previous=overwrite_previous,
+                           overwrite_GH_summaries=overwrite_GH_summaries,
+                           thresh_time=thresh_time,
+                           n_fit_max=n_fit_max,
+                           max_images=max_images,
+                           redo_without_outliers=redo_without_outliers,
+                           max_stars=max_stars,
+                           plot_indv_star_pms=plot_indv_star_pms)
+    else:
+        analyse_images(image_names,
+                       field,path,
+                       overwrite_previous=overwrite_previous,
+                       overwrite_GH_summaries=overwrite_GH_summaries,
+                       thresh_time=thresh_time,
+                       n_fit_max=n_fit_max,
+                       max_images=max_images,
+                       redo_without_outliers=redo_without_outliers,
+                       max_stars=max_stars,
+                       plot_indv_star_pms=plot_indv_star_pms)
+
+    return 
+
+
 font = {'family' : 'serif',
 #        'weight' : 'bold',
         'size'   : 16,}
@@ -54,7 +168,10 @@ pixel_scale_ratios = {'ACS':50,'WFC3':40} #mas/pixel
 get_matrix_params = process_GH.get_matrix_params
 correlation_names = process_GH.correlation_names
 
-def all_image_analysis(field,path,overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0):
+def all_image_analysis(field,path,
+                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0,
+                       n_fit_max=3,max_images=10,redo_without_outliers=True,max_stars=2000,
+                       plot_indv_star_pms=True):
     '''
     
     '''
@@ -122,8 +239,10 @@ def all_image_analysis(field,path,overwrite_previous=True,overwrite_GH_summaries
         if [image_name] not in linked_image_list:
             linked_image_list.insert(image_ind,[image_name])
     for entry in linked_image_list:
-        analyse_images(entry,field,path,overwrite_previous,overwrite_GH_summaries,thresh_time)
-    
+        analyse_images(entry,field,path,overwrite_previous,overwrite_GH_summaries,thresh_time,
+                       n_fit_max,max_images,redo_without_outliers,max_stars,
+                       plot_indv_star_pms)
+        
     return 
 
 
@@ -386,10 +505,15 @@ def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_i
 
 
 def analyse_images(image_list,field,path,
-                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0):
+                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0,
+                   n_fit_max=3,max_images=10,redo_without_outliers=True,max_stars=2000,
+                   plot_indv_star_pms=True):
     '''
     Simultaneously analyzes the images in image_list in field along path
     '''
+    
+    n_threads = cpu_count()
+    print(f'Using {n_threads} CPU(s)')
 
     outpath = f'{path}{field}/Bayesian_PMs/'
     if (not os.path.isfile(f'{outpath}gaiahub_image_transformation_summaries.csv')) or (overwrite_GH_summaries):
@@ -445,28 +569,28 @@ def analyse_images(image_list,field,path,
     
     trans_params = ['Xo','Yo','Wo','Zo','AG','BG','CG','DG','rotate_mult_fact']
     
-    redo_without_outliers = False #use the first set of results to remove obvious outliers, then redo
-    redo_without_outliers = True #use the first set of results to remove obvious outliers, then redo
-    n_fit_max = 5 #don't exceed this number of fitting iterations
-    n_fit_max = 3 #don't exceed this number of fitting iterations
-    
-    max_images = 10 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
-    max_images = 6 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
-    max_images = 2 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
-    max_images = 1 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
-    max_images = 6 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
-    # max_images = 4 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
-    max_images = 10 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
-    # max_images = 5 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
+#    redo_without_outliers = False #use the first set of results to remove obvious outliers, then redo
+#    redo_without_outliers = True #use the first set of results to remove obvious outliers, then redo
+#    n_fit_max = 5 #don't exceed this number of fitting iterations
+#    n_fit_max = 3 #don't exceed this number of fitting iterations
+#    
+#    max_images = 10 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
+#    max_images = 6 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
+#    max_images = 2 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
+#    max_images = 1 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
+#    max_images = 6 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
+#    # max_images = 4 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
+#    max_images = 10 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
+#    # max_images = 5 #truncate to this many images if there are more than that to keep runtime/convergence time reasonable
     
     gaia_mjd = 57388.5 #J2016.0 in MJD
     
 #    hst_pos_err_mult = 1.0 #inflate errors on position in HST pixels
     # hst_pos_err_mult = 2.0 #inflate errors on position in HST pixels
     
-    max_stars = 2000 #maximum number of stars to use
-#    max_stars = 100 #maximum number of stars to use
-#    max_stars = 50 #maximum number of stars to use
+#    max_stars = 2000 #maximum number of stars to use
+##    max_stars = 100 #maximum number of stars to use
+##    max_stars = 50 #maximum number of stars to use
     
     plot_indv_star_pms = True
     if field in ['LMC']:
@@ -4113,45 +4237,40 @@ def offset_jac(ra,dec,ra0,dec0):
     # In[2]:
 
 if __name__ == '__main__':
-    overwrite = True
-    overwrite_GH_summaries = False
-    path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
     
-       
-#    # n_threads = 16
-#    # n_threads = 8
-#    n_threads = 4
-#    # n_threads = 1
+    testing = False
+#    testing = True
     
-    n_threads = cpu_count()
-    n_threads = 4
-    # n_threads = 1
-    print(f'Using {n_threads} CPU(s)')
+    if not testing:
+        gaiahub_BPMs(sys.argv[1:])
+    else:
+        overwrite = True
+        overwrite_GH_summaries = False
+        path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
         
-#    field = 'Fornax_dSph'
-    field = 'COSMOS_field'
-
-    thresh_time = ((datetime.datetime(2023,5,22,15,20,38,259741)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-    if field in ['COSMOS_field']:
-        thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-
-#    analyse_images(['j8pu0bswq'],
-#                   field,path,
-#                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
-##    analyse_images(['j8pu0bswq','j8pu0bsyq'],
-    analyse_images(['j8pu0bswq','j8pu0bt1q'],
-                   field,path,
-                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
-#    analyse_images(['j8pu0bswq','j8pu0bsyq','j8pu0bt1q','j8pu0bt5q'],
-#                   field,path,
-#                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+    #    field = 'Fornax_dSph'
+        field = 'COSMOS_field'
+    
+        thresh_time = ((datetime.datetime(2023,5,22,15,20,38,259741)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+        if field in ['COSMOS_field']:
+            thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+    
+    #    analyse_images(['j8pu0bswq'],
+    #                   field,path,
+    #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+        analyse_images(['j8pu0bswq','j8pu0bsyq'],
+                       field,path,
+                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+    #    analyse_images(['j8pu0bswq','j8pu0bsyq','j8pu0bt1q','j8pu0bt5q'],
+    #                   field,path,
+    #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+        
+        
+        
+    #    all_image_analysis(field,path,
+    #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
     
     
-    
-#    all_image_analysis(field,path,
-#                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
-
-
 
 
 
