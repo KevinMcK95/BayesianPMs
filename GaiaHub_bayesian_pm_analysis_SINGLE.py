@@ -1080,12 +1080,7 @@ def analyse_images(image_list,field,path,
                 if fit_count == 0:
                     keep_stars = ~all_outliers
 #                n_used_stars = np.sum(keep_stars)
-                                
-                iteration_string = f'   Iteration {fit_count}   '
-                print('\n\n'+f'-'*len(iteration_string))
-                print(iteration_string)
-                print(f'-'*len(iteration_string))
-                
+                                                
                 #if the star has no good images, then use all the images to measure a PM, but don't use in the transform fits
                 #if the star has some good images, only use those images to measure PM, and use in the transform fit of those images
                 #if a star has all good images, use all images to measure PM, and use in all tranform fits
@@ -1117,10 +1112,19 @@ def analyse_images(image_list,field,path,
                     multiplicity[curr_inds] = np.sum(use_inds[curr_inds])
                 n_stars_unique = len(unique_ids)
                 n_used_stars_unique = np.sum(unique_keep)
+                if n_stars_unique == np.sum(unique_missing_prior_PM):
+                    print(f"SKIPPING fit of image {image_name} in {mask_name} because no sources have Gaia priors. The results will be the same as GaiaHub's output.")
+                    skip_fitting = True
+                    break
                 
     #            if (np.sum(unique_counts > 1) < 5) and (field in ['COSMOS_field']):
     #                print(f'\nSKIPPING {hst_image_names} because of too few matching stars')
     #                continue
+    
+                iteration_string = f'   Iteration {fit_count}   '
+                print('\n\n'+f'-'*len(iteration_string))
+                print(iteration_string)
+                print(f'-'*len(iteration_string))
                 
                 print()
                 print(f"Fitting {n_images} images in {mask_name} using image {hst_image_names}")
@@ -1240,6 +1244,9 @@ def analyse_images(image_list,field,path,
                     global_vector_cov = (np.einsum('ni,nj->ij',diff,diff)/(len(diff)-1))*10**2
                 if (not np.isfinite(global_vector_cov[2,2])) or (not np.isfinite(global_vector_cov[3,3])):
                     global_vector_cov[2:4,2:4] = np.array([[100**2,0],[0,100**2]])
+                global_vector_mean[~np.isfinite(global_vector_mean)] = 0
+                if (not np.isfinite(global_vector_cov[2,2])) or (not np.isfinite(global_vector_cov[3,3])):
+                    global_vector_cov[2:4,2:4] = np.array([[100**2,0],[0,100**2]])
                 min_pm_err = 10.0
                 cov_mult_factor = max(1.0,min_pm_err**2/global_vector_cov[2,2],min_pm_err**2/global_vector_cov[3,3])
                 global_vector_cov *= cov_mult_factor
@@ -1247,8 +1254,8 @@ def analyse_images(image_list,field,path,
                 global_vector_cov_copy = np.zeros_like(global_vector_cov)
                 global_vector_cov_copy[2:4,2:4] = global_vector_cov[2:4,2:4]
                 global_vector_cov = global_vector_cov_copy
-                global_vector_cov[0,0] = 100**2
-                global_vector_cov[1,1] = 100**2 #diffuse prior on the offsets
+                global_vector_cov[0,0] = 1000**2
+                global_vector_cov[1,1] = 1000**2 #diffuse prior on the offsets
                 global_vector_cov[4,4] = 10**2 #diffuse prior on the parallax
     
 #                global_vector_inv_cov = np.linalg.inv(global_vector_cov)
@@ -4258,17 +4265,17 @@ if __name__ == '__main__':
     #    analyse_images(['j8pu0bswq'],
     #                   field,path,
     #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
-        analyse_images(['j8pu0bswq','j8pu0bsyq'],
-                       field,path,
-                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+#        analyse_images(['j8pu0bswq','j8pu0bsyq'],
+#                       field,path,
+#                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
     #    analyse_images(['j8pu0bswq','j8pu0bsyq','j8pu0bt1q','j8pu0bt5q'],
     #                   field,path,
     #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
         
         
         
-    #    all_image_analysis(field,path,
-    #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+        all_image_analysis(field,path,
+                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
     
     
 
