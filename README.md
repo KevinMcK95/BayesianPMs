@@ -1,5 +1,5 @@
 # BayesianPMs
-Use the outputs from \url{https://github.com/AndresdPM/GaiaHub} GaiaHub to measure Bayesian Proper Motions from Gaia and archival Hubble images.
+Use the outputs from [GaiaHub](https://pages.github.com/](https://github.com/AndresdPM/GaiaHub) to measure Bayesian Proper Motions from Gaia and archival Hubble images.
 
 Works best for sources in the 16-17 < G < 21.5 mag range in medium- to low-density environemnts. High-density environments are likely to have incorrect cross-matching between Gaia and Hubble sources. 
 
