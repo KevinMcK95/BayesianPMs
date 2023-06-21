@@ -126,6 +126,265 @@ def all_image_analysis(field,path,overwrite_previous=True,overwrite_GH_summaries
     
     return 
 
+
+def lnpost_vector(params,
+                  n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
+                  proper_offset_jacs,proper_offset_jac_invs,unique_gaia_offset_inv_covs,use_inds,unique_inds,
+                  parallax_offset_vector,delta_times,unique_inv_inds,delta_time_identities,global_pm_inv_cov,
+                  unique_gaia_pm_inv_covs,unique_V_theta_i_inv_dot_theta_i,unique_V_mu_i_inv_dot_mu_i,
+                  V_mu_global_inv_dot_mu_global,unique_gaia_offsets,unique_gaia_pms,global_pm_mean,
+                  unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
+                  global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
+                  unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                  seed=101,n_pms=1) -> np.ndarray:
+#    print(params)
+#    np.random.seed(seed)
+#    print(seed)
+#    seed = (os.getpid() * int(time.time())) % 123456789
+    np.random.seed(seed)
+
+    #use the current transformation parameter draws to define draws of PMs and parallaxes
+    #then evaluate posterior probabilities from those, and sum over to get trans_params posterior probs
+    ags = params[0::n_param_indv]
+    bgs = params[1::n_param_indv]
+    w0s = params[2::n_param_indv]
+    z0s = params[3::n_param_indv]
+    cgs = params[4::n_param_indv]
+    dgs = params[5::n_param_indv]
+    # x0s = param_outputs[:,0]
+    # y0s = param_outputs[:,1]
+
+    # if np.any(np.abs(w0s-param_outputs[:,2]) > 1000) or np.any(np.abs(z0s-param_outputs[:,3]) > 1000):
+    #     result = np.zeros((len(unique_ids),5+1))
+    #     result[:,0] = -np.inf
+    #     return result                
+    
+    star_hst_gaia_pos = np.zeros((len(x),2)) #in gaia pixels
+    star_hst_gaia_pos_cov = np.zeros((len(x),2,2)) #in gaia pixels
+    star_ratios = np.zeros(len(x))
+        
+    matrices = np.zeros((len(x),2,2))
+    matrices_T = np.zeros((len(x),2,2))
+    
+    star_ratios[:] = 1
+    poss_matrices = np.zeros((len(x0s),2,2))
+    poss_matrices[:,0,0] = ags
+    poss_matrices[:,0,1] = bgs
+    poss_matrices[:,1,0] = cgs
+    poss_matrices[:,1,1] = dgs
+    poss_matrices_T = np.copy(poss_matrices)
+    poss_matrices_T[:,0,1] = cgs
+    poss_matrices_T[:,1,0] = bgs
+    
+    matrices = poss_matrices[img_nums]
+    matrices_T = poss_matrices_T[img_nums]
+    wz0s = np.array([w0s,z0s]).T[img_nums]
+    
+    xy_trans = np.einsum('nij,nj->ni',matrices,xy-xy0s)+wz0s
+    star_hst_gaia_pos = xy_g-xy_trans
+        
+    star_hst_gaia_pos_cov = np.einsum('nij,njk->nik',matrices,np.einsum('nij,njk->nik',hst_covs,matrices_T))
+    star_ratios = star_ratios[:,None,None]
+    star_hst_gaia_pos_inv_cov = np.linalg.inv(star_hst_gaia_pos_cov)    
+                    
+    jac_V_data_inv_jac = np.einsum('nji,njk->nik',proper_offset_jacs,np.einsum('nij,njk->nik',star_hst_gaia_pos_inv_cov,proper_offset_jacs))
+    inv_jac_dot_d_ij = np.einsum('nij,nj->ni',proper_offset_jac_invs,star_hst_gaia_pos)
+    summed_jac_V_data_inv_jac = np.add.reduceat(jac_V_data_inv_jac*use_inds[:,None,None],unique_inds)
+    Sigma_theta_i_inv = unique_gaia_offset_inv_covs+summed_jac_V_data_inv_jac
+    Sigma_theta_i = np.linalg.inv(Sigma_theta_i_inv)
+    
+    jac_V_data_inv_jac_dot_parallax_vects = np.einsum('nij,nj->ni',jac_V_data_inv_jac,parallax_offset_vector)
+    summed_jac_V_data_inv_jac_dot_parallax_vects = np.add.reduceat(jac_V_data_inv_jac_dot_parallax_vects*use_inds[:,None],unique_inds)
+    jac_V_data_inv_jac_dot_d_ij = np.einsum('nij,nj->ni',jac_V_data_inv_jac,inv_jac_dot_d_ij)
+    summed_jac_V_data_inv_jac_dot_d_ij = np.add.reduceat(jac_V_data_inv_jac_dot_d_ij*use_inds[:,None],unique_inds)
+    summed_jac_V_data_inv_jac_times = np.add.reduceat(jac_V_data_inv_jac*delta_times[:,None,None]*use_inds[:,None,None],unique_inds)
+    
+    A_mu_i = np.einsum('nij,njk->nik',Sigma_theta_i,summed_jac_V_data_inv_jac_times)
+    C_mu_ij = delta_time_identities-A_mu_i[unique_inv_inds]
+    A_mu_i_inv = np.linalg.inv(A_mu_i)
+    C_mu_ij_inv = np.linalg.inv(C_mu_ij)
+    
+    Sigma_mu_theta_i_inv = np.einsum('nij,njk->nik',np.einsum('nji,njk->nik',A_mu_i,unique_gaia_offset_inv_covs),A_mu_i)
+    Sigma_mu_d_ij_inv = np.einsum('nij,njk->nik',np.einsum('nji,njk->nik',C_mu_ij,jac_V_data_inv_jac),C_mu_ij)
+    
+    Sigma_mu_i_inv = global_pm_inv_cov+unique_gaia_pm_inv_covs+Sigma_mu_theta_i_inv+\
+                     np.add.reduceat(Sigma_mu_d_ij_inv*use_inds[:,None,None],unique_inds)
+    Sigma_mu_i = np.linalg.inv(Sigma_mu_i_inv)
+    
+    A_plx_mu_i = np.einsum('nij,nj->ni',Sigma_theta_i,-1*summed_jac_V_data_inv_jac_dot_parallax_vects)
+    B_plx_mu_i = np.einsum('nij,nj->ni',Sigma_theta_i,unique_V_theta_i_inv_dot_theta_i\
+                                                        -summed_jac_V_data_inv_jac_dot_d_ij)
+    
+    Sigma_mu_theta_i_inv_dot_A_mu_i_inv = np.einsum('nij,njk->nik',Sigma_mu_theta_i_inv,A_mu_i_inv)
+    Sigma_mu_d_ij_inv_dot_C_mu_ij_inv = np.einsum('nij,njk->nik',Sigma_mu_d_ij_inv,C_mu_ij_inv)
+    
+    C_plx_mu_i = np.einsum('nij,nj->ni',Sigma_mu_i,np.einsum('nij,nj->ni',Sigma_mu_theta_i_inv_dot_A_mu_i_inv,A_plx_mu_i)\
+                                                     -np.add.reduceat(np.einsum('nij,nj->ni',Sigma_mu_d_ij_inv_dot_C_mu_ij_inv,parallax_offset_vector+A_plx_mu_i[unique_inv_inds])*use_inds[:,None],unique_inds))
+    D_plx_mu_i = -1*np.einsum('nij,nj->ni',Sigma_mu_i,unique_V_mu_i_inv_dot_mu_i+V_mu_global_inv_dot_mu_global+\
+                                                        +np.einsum('nij,nj->ni',Sigma_mu_theta_i_inv_dot_A_mu_i_inv,unique_gaia_offsets-B_plx_mu_i)\
+                                                        +np.add.reduceat(np.einsum('nij,nj->ni',Sigma_mu_d_ij_inv_dot_C_mu_ij_inv,inv_jac_dot_d_ij+B_plx_mu_i[unique_inv_inds])*use_inds[:,None],unique_inds))
+                        
+    E_plx_theta_i = np.einsum('nij,nj->ni',A_mu_i,C_plx_mu_i)-A_plx_mu_i
+    F_plx_theta_i = np.einsum('nij,nj->ni',A_mu_i,D_plx_mu_i)-B_plx_mu_i
+    
+    G_plx_d_ij = np.einsum('nij,nj->ni',C_mu_ij,C_plx_mu_i[unique_inv_inds])+A_plx_mu_i[unique_inv_inds]+parallax_offset_vector
+    H_plx_d_ij = np.einsum('nij,nj->ni',C_mu_ij,D_plx_mu_i[unique_inv_inds])+B_plx_mu_i[unique_inv_inds]+inv_jac_dot_d_ij
+
+    G_plx_d_ij_T_dot_V_data_inv = np.einsum('nj,nij->ni',G_plx_d_ij,jac_V_data_inv_jac)  
+    ivar_plx_d_ij = np.einsum('ni,ni->n',G_plx_d_ij_T_dot_V_data_inv,G_plx_d_ij)
+    mu_times_ivar_plx_d_ij = np.einsum('ni,ni->n',G_plx_d_ij_T_dot_V_data_inv,H_plx_d_ij)
+#                mu_plx_d_ij = mu_times_ivar_plx_d_ij/ivar_plx_d_ij
+    summed_ivar_plx_d_ij = np.add.reduceat(ivar_plx_d_ij*use_inds,unique_inds)
+    summed_mu_times_ivar_plx_d_ij = np.add.reduceat(mu_times_ivar_plx_d_ij*use_inds,unique_inds)
+    
+    C_plx_mu_i_T_dot_V_mu_i_inv = np.einsum('nj,nij->ni',C_plx_mu_i,unique_gaia_pm_inv_covs)  
+    ivar_plx_mu_i = np.einsum('ni,ni->n',C_plx_mu_i_T_dot_V_mu_i_inv,C_plx_mu_i)
+    mu_times_ivar_plx_mu_i = np.einsum('ni,ni->n',C_plx_mu_i_T_dot_V_mu_i_inv,D_plx_mu_i+unique_gaia_pms)
+#                mu_plx_mu_i = mu_times_ivar_plx_mu_i/ivar_plx_mu_i
+    
+    C_plx_mu_i_T_dot_V_mu_global_inv = np.einsum('nj,ij->ni',C_plx_mu_i,global_pm_inv_cov)  
+    ivar_plx_mu_global = np.einsum('ni,ni->n',C_plx_mu_i_T_dot_V_mu_global_inv,C_plx_mu_i)
+    mu_times_ivar_plx_mu_global = np.einsum('ni,ni->n',C_plx_mu_i_T_dot_V_mu_global_inv,D_plx_mu_i+global_pm_mean)
+#                mu_plx_mu_global = mu_times_ivar_plx_mu_global/ivar_plx_mu_global
+    
+    E_plx_theta_i_T_dot_V_theta_i_inv = np.einsum('nj,nij->ni',E_plx_theta_i,unique_gaia_offset_inv_covs)  
+    ivar_plx_theta_i = np.einsum('ni,ni->n',E_plx_theta_i_T_dot_V_theta_i_inv,E_plx_theta_i)
+    mu_times_ivar_plx_theta_i = np.einsum('ni,ni->n',E_plx_theta_i_T_dot_V_theta_i_inv,F_plx_theta_i+unique_gaia_offsets)
+#                mu_plx_theta_i = mu_times_ivar_plx_theta_i/ivar_plx_theta_i
+    
+    
+    ivar_plx_i = summed_ivar_plx_d_ij+ivar_plx_mu_i+ivar_plx_mu_global\
+                 +ivar_plx_theta_i+unique_gaia_parallax_ivars+global_parallax_ivar
+    var_plx_i = 1/ivar_plx_i
+    std_plx_i = np.sqrt(var_plx_i)
+    # print('plx',summed_ivar_plx_d_ij.min(),ivar_plx_theta_i.min(),ivar_plx_mu_global.min())
+    # print('plx',(unique_gaia_parallax_errs/std_plx_i).min())
+    mu_plx_i = (summed_mu_times_ivar_plx_d_ij+mu_times_ivar_plx_mu_i+mu_times_ivar_plx_mu_global\
+                 +mu_times_ivar_plx_theta_i\
+                 +unique_gaia_parallax_ivars*unique_gaia_parallaxes\
+                 +global_parallax_ivar*global_parallax_mean)/ivar_plx_i
+                             
+    parallax_draws = np.random.randn(n_pms,*std_plx_i.shape)*std_plx_i+mu_plx_i
+#            single_parallax_draws = np.random.randn(*std_plx_i.shape)*std_plx_i+mu_plx_i
+#            parallax_draws[:] = single_parallax_draws
+    
+    B_mu_i = parallax_draws[:,:,None]*A_plx_mu_i[None,:]-B_plx_mu_i
+#                D_mu_ij = inv_jac_dot_d_ij-B_mu_i[:,unique_inv_inds]-parallax_draws[:,unique_inv_inds,None]*parallax_offset_vector
+#            mu_mu_theta_i = np.einsum('nij,nj->ni',,)
+#            mu_mu_i = np.einsum('nij,njk->nik',Sigma_mu_i,V_mu_global_inv_dot_mu_global+unique_V_mu_i_inv_dot_mu_i\
+#                                +np.einsum('nij,njk->nik',Sigma_mu_theta_i_inv,mu_mu_theta_i))
+    mu_mu_i = parallax_draws[:,:,None]*C_plx_mu_i[None,:]-D_plx_mu_i
+
+    eig_vals,eig_vects = np.linalg.eig(Sigma_mu_i)
+    eig_signs = np.sign(eig_vals)
+    eig_vals *= eig_signs
+    eig_vects[:,:,0] *= eig_signs[:,0][:,None]
+    eig_vects[:,:,1] *= eig_signs[:,1][:,None]
+    pm_gauss_draws = np.random.randn(n_pms,len(unique_ids),eig_vals.shape[-1])
+#            single_gauss_draws = np.random.randn(len(unique_ids),eig_vals.shape[-1])
+#            pm_gauss_draws[:] = single_gauss_draws
+    pm_draws = pm_gauss_draws*np.sqrt(eig_vals) #pms in x,y HST
+    pm_draws = np.einsum('nij,wnj->wni',eig_vects,pm_draws)+mu_mu_i
+    
+    mu_theta_i = np.einsum('nij,wnj->wni',A_mu_i,pm_draws)-B_mu_i
+                
+    eig_vals,eig_vects = np.linalg.eig(Sigma_theta_i)
+    eig_signs = np.sign(eig_vals)
+    eig_vals *= eig_signs
+    eig_vects[:,:,0] *= eig_signs[:,0][:,None]
+    eig_vects[:,:,1] *= eig_signs[:,1][:,None]
+    offset_gauss_draws = np.random.randn(n_pms,len(unique_ids),eig_vals.shape[-1])
+#            single_gauss_draws = np.random.randn(len(unique_ids),eig_vals.shape[-1])
+#            offset_gauss_draws[:] = single_gauss_draws
+    offset_draws = offset_gauss_draws*np.sqrt(eig_vals) #pms in x,y HST
+    offset_draws = np.einsum('nij,wnj->wni',eig_vects,offset_draws)+mu_theta_i
+    
+#            data_diff_vals = star_hst_gaia_pos-np.einsum('nij,wnj->wni',proper_offset_jacs,delta_times[None,:,None]*pm_draws[:,unique_inv_inds]\
+#                                                                                           +parallax_draws[:,unique_inv_inds][:,:,None]*parallax_offset_vector[None,:]\
+#                                                                                           -offset_draws[:,unique_inv_inds])
+#            ll = -0.5*np.einsum('wni,wni->wn',data_diff_vals,np.einsum('nij,wnj->wni',star_hst_gaia_pos_inv_cov,data_diff_vals))\
+#                 -0.5*np.log(np.linalg.det(star_hst_gaia_pos_cov))
+
+    data_diff_vals = inv_jac_dot_d_ij-(delta_times[None,:,None]*pm_draws[:,unique_inv_inds]\
+                                       +parallax_draws[:,unique_inv_inds][:,:,None]*parallax_offset_vector[None,:]\
+                                       -offset_draws[:,unique_inv_inds])
+    
+    ll = -0.5*np.einsum('wni,wni->wn',data_diff_vals,np.einsum('nij,wnj->wni',jac_V_data_inv_jac,data_diff_vals))\
+         -0.5*np.log(np.linalg.det(np.linalg.inv(jac_V_data_inv_jac)))
+    summed_ll = np.add.reduceat(ll*use_inds[None,:],unique_inds,axis=1)
+    
+    prior_pm_diff = pm_draws-unique_gaia_pms
+    prior_parallax_diff = parallax_draws-unique_gaia_parallaxes
+    prior_offset_diff = offset_draws-unique_gaia_offsets
+    global_pm_diff = pm_draws-global_pm_mean
+    global_parallax_diff = parallax_draws-global_parallax_mean
+                
+    lp = -0.5*np.einsum('wni,wni->wn',prior_pm_diff,np.einsum('nij,wnj->wni',unique_gaia_pm_inv_covs,prior_pm_diff))\
+         -0.5*log_unique_gaia_pm_covs_det\
+         -0.5*np.einsum('wni,wni->wn',global_pm_diff,np.einsum('ij,wnj->wni',global_pm_inv_cov,global_pm_diff))\
+         -0.5*log_global_pm_cov_det\
+         -0.5*np.power(prior_parallax_diff,2)*unique_gaia_parallax_ivars-0.5*np.log(unique_gaia_parallax_vars)\
+         -0.5*np.power(global_parallax_diff,2)*global_parallax_ivar\
+         -0.5*np.einsum('wni,wni->wn',prior_offset_diff,np.einsum('nij,wnj->wni',unique_gaia_offset_inv_covs,prior_offset_diff))\
+         -0.5*log_unique_gaia_offset_covs_det
+         
+    draw_pm_diff = pm_draws-mu_mu_i
+    draw_parallax_diff = parallax_draws-mu_plx_i
+    draw_offset_diff = offset_draws-mu_theta_i
+    
+    lnorm = -0.5*np.einsum('wni,wni->wn',draw_pm_diff,np.einsum('nij,wnj->wni',Sigma_mu_i_inv,draw_pm_diff)) \
+            -0.5*np.log(np.linalg.det(Sigma_mu_i))\
+            -0.5*np.einsum('wni,wni->wn',draw_offset_diff,np.einsum('nij,wnj->wni',Sigma_theta_i_inv,draw_offset_diff)) \
+            -0.5*np.log(np.linalg.det(Sigma_theta_i))\
+            -0.5*np.power(draw_parallax_diff,2)*ivar_plx_i-0.5*np.log(var_plx_i)
+                                
+    logprobs = np.sum((summed_ll+lp-lnorm)[:,unique_keep],axis=1)
+    
+    if n_pms > 1:
+        print(logprobs)
+        print(logprobs-logprobs.min())
+        raise ValueError('alksdjlksjslkjs')
+    renorm_fact = np.max(logprobs)
+    final_log_post = np.log(np.sum(np.exp(logprobs-renorm_fact)))+renorm_fact
+    
+    result = np.zeros((len(unique_ids),5+1))
+    #give back an example sample of parallaxes and corresponding PMs
+    result[:,0] = final_log_post
+#                result[:,1:] = vector_draws[0]
+    result[:,1:3] = offset_draws[0]
+    result[:,3:5] = pm_draws[0]
+    result[:,5] = parallax_draws[0]
+    
+    return result             
+
+def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_ind,
+                        n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
+                        proper_offset_jacs,proper_offset_jac_invs,unique_gaia_offset_inv_covs,use_inds,unique_inds,
+                        parallax_offset_vector,delta_times,unique_inv_inds,delta_time_identities,global_pm_inv_cov,
+                        unique_gaia_pm_inv_covs,unique_V_theta_i_inv_dot_theta_i,unique_V_mu_i_inv_dot_mu_i,
+                        V_mu_global_inv_dot_mu_global,unique_gaia_offsets,unique_gaia_pms,global_pm_mean,
+                        unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
+                        global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
+                        unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                        out_q):
+    output = np.zeros((len(walker_inds),len(unique_ids),5+1))
+    for count,w_ind in enumerate(walker_inds):
+        params = new_params[w_ind]
+        output[count] = lnpost_vector(params,
+                                      n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
+                                      proper_offset_jacs,proper_offset_jac_invs,unique_gaia_offset_inv_covs,use_inds,unique_inds,
+                                      parallax_offset_vector,delta_times,unique_inv_inds,delta_time_identities,global_pm_inv_cov,
+                                      unique_gaia_pm_inv_covs,unique_V_theta_i_inv_dot_theta_i,unique_V_mu_i_inv_dot_mu_i,
+                                      V_mu_global_inv_dot_mu_global,unique_gaia_offsets,unique_gaia_pms,global_pm_mean,
+                                      unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
+                                      global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
+                                      unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                                      seed=w_ind+(step_ind+1)*(nwalkers_sample+1))
+    out_q.put((output,thread_ind))
+    return
+
+
+
 def analyse_images(image_list,field,path,
                    overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0):
     '''
@@ -1356,277 +1615,34 @@ def analyse_images(image_list,field,path,
                 pos_lnpost = np.zeros((nwalkers_sample))
                 previous_params = pos
                 
-                
-                def lnpost_vector(params,seed=101,n_pms=1) -> np.ndarray:
-#                    np.random.seed(seed)
-                    
-                    #use the current transformation parameter draws to define draws of PMs and parallaxes
-                    #then evaluate posterior probabilities from those, and sum over to get trans_params posterior probs
-                    ags = params[0::n_param_indv]
-                    bgs = params[1::n_param_indv]
-                    w0s = params[2::n_param_indv]
-                    z0s = params[3::n_param_indv]
-                    cgs = params[4::n_param_indv]
-                    dgs = params[5::n_param_indv]
-                    # x0s = param_outputs[:,0]
-                    # y0s = param_outputs[:,1]
-                
-                    # if np.any(np.abs(w0s-param_outputs[:,2]) > 1000) or np.any(np.abs(z0s-param_outputs[:,3]) > 1000):
-                    #     result = np.zeros((len(unique_ids),5+1))
-                    #     result[:,0] = -np.inf
-                    #     return result                
-                    
-                    star_hst_gaia_pos = np.zeros((len(x),2)) #in gaia pixels
-                    star_hst_gaia_pos_cov = np.zeros((len(x),2,2)) #in gaia pixels
-                    star_ratios = np.zeros(len(x))
-                        
-                    matrices = np.zeros((len(x),2,2))
-                    matrices_T = np.zeros((len(x),2,2))
-                    
-                    star_ratios[:] = 1
-                    poss_matrices = np.zeros((len(x0s),2,2))
-                    poss_matrices[:,0,0] = ags
-                    poss_matrices[:,0,1] = bgs
-                    poss_matrices[:,1,0] = cgs
-                    poss_matrices[:,1,1] = dgs
-                    poss_matrices_T = np.copy(poss_matrices)
-                    poss_matrices_T[:,0,1] = cgs
-                    poss_matrices_T[:,1,0] = bgs
-                    
-                    matrices = poss_matrices[img_nums]
-                    matrices_T = poss_matrices_T[img_nums]
-                    wz0s = np.array([w0s,z0s]).T[img_nums]
-                    
-                    xy_trans = np.einsum('nij,nj->ni',matrices,xy-xy0s)+wz0s
-                    star_hst_gaia_pos = xy_g-xy_trans
-                    
-                #                 for j in range(len(x0s)):
-                #                     curr_img = np.where(img_nums == j)[0]
-                #                     curr_x,curr_y = x[curr_img],y[curr_img]
-                #                     curr_x_g,curr_y_g = x_g[curr_img],y_g[curr_img]
-                        
-                #                     a,b,c,d = ags[j],bgs[j],cgs[j],dgs[j]
-                # #                    ratio = np.sqrt(a*d-b*c)
-                # #                    rot = np.arctan2(b-c,a+d)*180/np.pi
-                # #                    on_skew = 0.5*(a-d)
-                # #                    off_skew = 0.5*(b+c)
-                
-                #                     x0,y0,w0,z0 = x0s[j],y0s[j],w0s[j],z0s[j]
-                
-                #                     x_trans = a*(curr_x-x0)+b*(curr_y-y0)+w0
-                #                     y_trans = c*(curr_x-x0)+d*(curr_y-y0)+z0
-                
-                #                     dx_trans = curr_x_g-x_trans
-                #                     dy_trans = curr_y_g-y_trans
-                
-                #                     star_hst_gaia_pos[curr_img,0] = dx_trans
-                #                     star_hst_gaia_pos[curr_img,1] = dy_trans
-                #     #                dpix_trans = np.sqrt(np.power(dx_trans,2)+np.power(dy_trans,2))
-                # #                    star_ratios[curr_img] = ratio
-                #                     star_ratios[curr_img] = 1
-                
-                #                     matrices[curr_img,0,0] = a
-                #                     matrices[curr_img,0,1] = b
-                #                     matrices[curr_img,1,0] = c
-                #                     matrices[curr_img,1,1] = d
-                #                     matrices_T[curr_img,0,0] = a
-                #                     matrices_T[curr_img,0,1] = c
-                #                     matrices_T[curr_img,1,0] = b
-                #                     matrices_T[curr_img,1,1] = d
-                        
-                # #                    hst_cov_in_gaia = np.dot(matrices,np.dot(hst_cov,matrices_T))
-                # #                    star_hst_gaia_pos_cov[curr_img] = hst_cov_in_gaia
-                    
-                    star_hst_gaia_pos_cov = np.einsum('nij,njk->nik',matrices,np.einsum('nij,njk->nik',hst_covs,matrices_T))
-                    star_ratios = star_ratios[:,None,None]
-                    star_hst_gaia_pos_inv_cov = np.linalg.inv(star_hst_gaia_pos_cov)
-                                    
-                    jac_V_data_inv_jac = np.einsum('nji,njk->nik',proper_offset_jacs,np.einsum('nij,njk->nik',star_hst_gaia_pos_inv_cov,proper_offset_jacs))
-                    inv_jac_dot_d_ij = np.einsum('nij,nj->ni',proper_offset_jac_invs,star_hst_gaia_pos)
-                    summed_jac_V_data_inv_jac = np.add.reduceat(jac_V_data_inv_jac*use_inds[:,None,None],unique_inds)
-                    Sigma_theta_i_inv = unique_gaia_offset_inv_covs+summed_jac_V_data_inv_jac
-                    Sigma_theta_i = np.linalg.inv(Sigma_theta_i_inv)
-                    
-                    jac_V_data_inv_jac_dot_parallax_vects = np.einsum('nij,nj->ni',jac_V_data_inv_jac,parallax_offset_vector)
-                    summed_jac_V_data_inv_jac_dot_parallax_vects = np.add.reduceat(jac_V_data_inv_jac_dot_parallax_vects*use_inds[:,None],unique_inds)
-                    jac_V_data_inv_jac_dot_d_ij = np.einsum('nij,nj->ni',jac_V_data_inv_jac,inv_jac_dot_d_ij)
-                    summed_jac_V_data_inv_jac_dot_d_ij = np.add.reduceat(jac_V_data_inv_jac_dot_d_ij*use_inds[:,None],unique_inds)
-                    summed_jac_V_data_inv_jac_times = np.add.reduceat(jac_V_data_inv_jac*delta_times[:,None,None]*use_inds[:,None,None],unique_inds)
-                    
-                    A_mu_i = np.einsum('nij,njk->nik',Sigma_theta_i,summed_jac_V_data_inv_jac_times)
-                    C_mu_ij = delta_time_identities-A_mu_i[unique_inv_inds]
-                    A_mu_i_inv = np.linalg.inv(A_mu_i)
-                    C_mu_ij_inv = np.linalg.inv(C_mu_ij)
-                    
-                    Sigma_mu_theta_i_inv = np.einsum('nij,njk->nik',np.einsum('nji,njk->nik',A_mu_i,unique_gaia_offset_inv_covs),A_mu_i)
-                    Sigma_mu_d_ij_inv = np.einsum('nij,njk->nik',np.einsum('nji,njk->nik',C_mu_ij,jac_V_data_inv_jac),C_mu_ij)
-                    
-                    Sigma_mu_i_inv = global_pm_inv_cov+unique_gaia_pm_inv_covs+Sigma_mu_theta_i_inv+\
-                                     np.add.reduceat(Sigma_mu_d_ij_inv*use_inds[:,None,None],unique_inds)
-                    Sigma_mu_i = np.linalg.inv(Sigma_mu_i_inv)
-                    
-                    A_plx_mu_i = np.einsum('nij,nj->ni',Sigma_theta_i,-1*summed_jac_V_data_inv_jac_dot_parallax_vects)
-                    B_plx_mu_i = np.einsum('nij,nj->ni',Sigma_theta_i,unique_V_theta_i_inv_dot_theta_i\
-                                                                        -summed_jac_V_data_inv_jac_dot_d_ij)
-                    
-                    Sigma_mu_theta_i_inv_dot_A_mu_i_inv = np.einsum('nij,njk->nik',Sigma_mu_theta_i_inv,A_mu_i_inv)
-                    Sigma_mu_d_ij_inv_dot_C_mu_ij_inv = np.einsum('nij,njk->nik',Sigma_mu_d_ij_inv,C_mu_ij_inv)
-                    
-                    C_plx_mu_i = np.einsum('nij,nj->ni',Sigma_mu_i,np.einsum('nij,nj->ni',Sigma_mu_theta_i_inv_dot_A_mu_i_inv,A_plx_mu_i)\
-                                                                     -np.add.reduceat(np.einsum('nij,nj->ni',Sigma_mu_d_ij_inv_dot_C_mu_ij_inv,parallax_offset_vector+A_plx_mu_i[unique_inv_inds])*use_inds[:,None],unique_inds))
-                    D_plx_mu_i = -1*np.einsum('nij,nj->ni',Sigma_mu_i,unique_V_mu_i_inv_dot_mu_i+V_mu_global_inv_dot_mu_global+\
-                                                                        +np.einsum('nij,nj->ni',Sigma_mu_theta_i_inv_dot_A_mu_i_inv,unique_gaia_offsets-B_plx_mu_i)\
-                                                                        +np.add.reduceat(np.einsum('nij,nj->ni',Sigma_mu_d_ij_inv_dot_C_mu_ij_inv,inv_jac_dot_d_ij+B_plx_mu_i[unique_inv_inds])*use_inds[:,None],unique_inds))
-                                        
-                    E_plx_theta_i = np.einsum('nij,nj->ni',A_mu_i,C_plx_mu_i)-A_plx_mu_i
-                    F_plx_theta_i = np.einsum('nij,nj->ni',A_mu_i,D_plx_mu_i)-B_plx_mu_i
-                    
-                    G_plx_d_ij = np.einsum('nij,nj->ni',C_mu_ij,C_plx_mu_i[unique_inv_inds])+A_plx_mu_i[unique_inv_inds]+parallax_offset_vector
-                    H_plx_d_ij = np.einsum('nij,nj->ni',C_mu_ij,D_plx_mu_i[unique_inv_inds])+B_plx_mu_i[unique_inv_inds]+inv_jac_dot_d_ij
-                
-                    G_plx_d_ij_T_dot_V_data_inv = np.einsum('nj,nij->ni',G_plx_d_ij,jac_V_data_inv_jac)  
-                    ivar_plx_d_ij = np.einsum('ni,ni->n',G_plx_d_ij_T_dot_V_data_inv,G_plx_d_ij)
-                    mu_times_ivar_plx_d_ij = np.einsum('ni,ni->n',G_plx_d_ij_T_dot_V_data_inv,H_plx_d_ij)
-                #                mu_plx_d_ij = mu_times_ivar_plx_d_ij/ivar_plx_d_ij
-                    summed_ivar_plx_d_ij = np.add.reduceat(ivar_plx_d_ij*use_inds,unique_inds)
-                    summed_mu_times_ivar_plx_d_ij = np.add.reduceat(mu_times_ivar_plx_d_ij*use_inds,unique_inds)
-                    
-                    C_plx_mu_i_T_dot_V_mu_i_inv = np.einsum('nj,nij->ni',C_plx_mu_i,unique_gaia_pm_inv_covs)  
-                    ivar_plx_mu_i = np.einsum('ni,ni->n',C_plx_mu_i_T_dot_V_mu_i_inv,C_plx_mu_i)
-                    mu_times_ivar_plx_mu_i = np.einsum('ni,ni->n',C_plx_mu_i_T_dot_V_mu_i_inv,D_plx_mu_i+unique_gaia_pms)
-                #                mu_plx_mu_i = mu_times_ivar_plx_mu_i/ivar_plx_mu_i
-                    
-                    C_plx_mu_i_T_dot_V_mu_global_inv = np.einsum('nj,ij->ni',C_plx_mu_i,global_pm_inv_cov)  
-                    ivar_plx_mu_global = np.einsum('ni,ni->n',C_plx_mu_i_T_dot_V_mu_global_inv,C_plx_mu_i)
-                    mu_times_ivar_plx_mu_global = np.einsum('ni,ni->n',C_plx_mu_i_T_dot_V_mu_global_inv,D_plx_mu_i+global_pm_mean)
-                #                mu_plx_mu_global = mu_times_ivar_plx_mu_global/ivar_plx_mu_global
-                    
-                    E_plx_theta_i_T_dot_V_theta_i_inv = np.einsum('nj,nij->ni',E_plx_theta_i,unique_gaia_offset_inv_covs)  
-                    ivar_plx_theta_i = np.einsum('ni,ni->n',E_plx_theta_i_T_dot_V_theta_i_inv,E_plx_theta_i)
-                    mu_times_ivar_plx_theta_i = np.einsum('ni,ni->n',E_plx_theta_i_T_dot_V_theta_i_inv,F_plx_theta_i+unique_gaia_offsets)
-                #                mu_plx_theta_i = mu_times_ivar_plx_theta_i/ivar_plx_theta_i
-                    
-                    
-                    ivar_plx_i = summed_ivar_plx_d_ij+ivar_plx_mu_i+ivar_plx_mu_global\
-                                 +ivar_plx_theta_i+unique_gaia_parallax_ivars+global_parallax_ivar
-                    var_plx_i = 1/ivar_plx_i
-                    std_plx_i = np.sqrt(var_plx_i)
-                    # print('plx',summed_ivar_plx_d_ij.min(),ivar_plx_theta_i.min(),ivar_plx_mu_global.min())
-                    # print('plx',(unique_gaia_parallax_errs/std_plx_i).min())
-                    mu_plx_i = (summed_mu_times_ivar_plx_d_ij+mu_times_ivar_plx_mu_i+mu_times_ivar_plx_mu_global\
-                                 +mu_times_ivar_plx_theta_i\
-                                 +unique_gaia_parallax_ivars*unique_gaia_parallaxes\
-                                 +global_parallax_ivar*global_parallax_mean)/ivar_plx_i
-                                             
-                    parallax_draws = np.random.randn(n_pms,*std_plx_i.shape)*std_plx_i+mu_plx_i
-                #            single_parallax_draws = np.random.randn(*std_plx_i.shape)*std_plx_i+mu_plx_i
-                #            parallax_draws[:] = single_parallax_draws
-                    
-                    B_mu_i = parallax_draws[:,:,None]*A_plx_mu_i[None,:]-B_plx_mu_i
-                #                D_mu_ij = inv_jac_dot_d_ij-B_mu_i[:,unique_inv_inds]-parallax_draws[:,unique_inv_inds,None]*parallax_offset_vector
-                #            mu_mu_theta_i = np.einsum('nij,nj->ni',,)
-                #            mu_mu_i = np.einsum('nij,njk->nik',Sigma_mu_i,V_mu_global_inv_dot_mu_global+unique_V_mu_i_inv_dot_mu_i\
-                #                                +np.einsum('nij,njk->nik',Sigma_mu_theta_i_inv,mu_mu_theta_i))
-                    mu_mu_i = parallax_draws[:,:,None]*C_plx_mu_i[None,:]-D_plx_mu_i
-                
-                    eig_vals,eig_vects = np.linalg.eig(Sigma_mu_i)
-                    eig_signs = np.sign(eig_vals)
-                    eig_vals *= eig_signs
-                    eig_vects[:,:,0] *= eig_signs[:,0][:,None]
-                    eig_vects[:,:,1] *= eig_signs[:,1][:,None]
-                    pm_gauss_draws = np.random.randn(n_pms,len(unique_ids),eig_vals.shape[-1])
-                #            single_gauss_draws = np.random.randn(len(unique_ids),eig_vals.shape[-1])
-                #            pm_gauss_draws[:] = single_gauss_draws
-                    pm_draws = pm_gauss_draws*np.sqrt(eig_vals) #pms in x,y HST
-                    pm_draws = np.einsum('nij,wnj->wni',eig_vects,pm_draws)+mu_mu_i
-                    
-                    mu_theta_i = np.einsum('nij,wnj->wni',A_mu_i,pm_draws)-B_mu_i
+                step_ind = -1 #for the first call
                                 
-                    eig_vals,eig_vects = np.linalg.eig(Sigma_theta_i)
-                    eig_signs = np.sign(eig_vals)
-                    eig_vals *= eig_signs
-                    eig_vects[:,:,0] *= eig_signs[:,0][:,None]
-                    eig_vects[:,:,1] *= eig_signs[:,1][:,None]
-                    offset_gauss_draws = np.random.randn(n_pms,len(unique_ids),eig_vals.shape[-1])
-                #            single_gauss_draws = np.random.randn(len(unique_ids),eig_vals.shape[-1])
-                #            offset_gauss_draws[:] = single_gauss_draws
-                    offset_draws = offset_gauss_draws*np.sqrt(eig_vals) #pms in x,y HST
-                    offset_draws = np.einsum('nij,wnj->wni',eig_vects,offset_draws)+mu_theta_i
-                    
-                #            data_diff_vals = star_hst_gaia_pos-np.einsum('nij,wnj->wni',proper_offset_jacs,delta_times[None,:,None]*pm_draws[:,unique_inv_inds]\
-                #                                                                                           +parallax_draws[:,unique_inv_inds][:,:,None]*parallax_offset_vector[None,:]\
-                #                                                                                           -offset_draws[:,unique_inv_inds])
-                #            ll = -0.5*np.einsum('wni,wni->wn',data_diff_vals,np.einsum('nij,wnj->wni',star_hst_gaia_pos_inv_cov,data_diff_vals))\
-                #                 -0.5*np.log(np.linalg.det(star_hst_gaia_pos_cov))
-                
-                    data_diff_vals = inv_jac_dot_d_ij-(delta_times[None,:,None]*pm_draws[:,unique_inv_inds]\
-                                                       +parallax_draws[:,unique_inv_inds][:,:,None]*parallax_offset_vector[None,:]\
-                                                       -offset_draws[:,unique_inv_inds])
-                    
-                    ll = -0.5*np.einsum('wni,wni->wn',data_diff_vals,np.einsum('nij,wnj->wni',jac_V_data_inv_jac,data_diff_vals))\
-                         -0.5*np.log(np.linalg.det(np.linalg.inv(jac_V_data_inv_jac)))
-                    summed_ll = np.add.reduceat(ll*use_inds[None,:],unique_inds,axis=1)
-                    
-                    prior_pm_diff = pm_draws-unique_gaia_pms
-                    prior_parallax_diff = parallax_draws-unique_gaia_parallaxes
-                    prior_offset_diff = offset_draws-unique_gaia_offsets
-                    global_pm_diff = pm_draws-global_pm_mean
-                    global_parallax_diff = parallax_draws-global_parallax_mean
-                                
-                    lp = -0.5*np.einsum('wni,wni->wn',prior_pm_diff,np.einsum('nij,wnj->wni',unique_gaia_pm_inv_covs,prior_pm_diff))\
-                         -0.5*log_unique_gaia_pm_covs_det\
-                         -0.5*np.einsum('wni,wni->wn',global_pm_diff,np.einsum('ij,wnj->wni',global_pm_inv_cov,global_pm_diff))\
-                         -0.5*log_global_pm_cov_det\
-                         -0.5*np.power(prior_parallax_diff,2)*unique_gaia_parallax_ivars-0.5*np.log(unique_gaia_parallax_vars)\
-                         -0.5*np.power(global_parallax_diff,2)*global_parallax_ivar\
-                         -0.5*np.einsum('wni,wni->wn',prior_offset_diff,np.einsum('nij,wnj->wni',unique_gaia_offset_inv_covs,prior_offset_diff))\
-                         -0.5*log_unique_gaia_offset_covs_det
-                         
-                    draw_pm_diff = pm_draws-mu_mu_i
-                    draw_parallax_diff = parallax_draws-mu_plx_i
-                    draw_offset_diff = offset_draws-mu_theta_i
-                    
-                    lnorm = -0.5*np.einsum('wni,wni->wn',draw_pm_diff,np.einsum('nij,wnj->wni',Sigma_mu_i_inv,draw_pm_diff)) \
-                            -0.5*np.log(np.linalg.det(Sigma_mu_i))\
-                            -0.5*np.einsum('wni,wni->wn',draw_offset_diff,np.einsum('nij,wnj->wni',Sigma_theta_i_inv,draw_offset_diff)) \
-                            -0.5*np.log(np.linalg.det(Sigma_theta_i))\
-                            -0.5*np.power(draw_parallax_diff,2)*ivar_plx_i-0.5*np.log(var_plx_i)
-                                                
-                    logprobs = np.sum((summed_ll+lp-lnorm)[:,unique_keep],axis=1)
-                    
-                    if n_pms > 1:
-                        print(logprobs)
-                        print(logprobs-logprobs.min())
-                        raise ValueError('alksdjlksjslkjs')
-                    renorm_fact = np.max(logprobs)
-                    final_log_post = np.log(np.sum(np.exp(logprobs-renorm_fact)))+renorm_fact
-                    
-                    result = np.zeros((len(unique_ids),5+1))
-                    #give back an example sample of parallaxes and corresponding PMs
-                    result[:,0] = final_log_post
-                #                result[:,1:] = vector_draws[0]
-                    result[:,1:3] = offset_draws[0]
-                    result[:,3:5] = pm_draws[0]
-                    result[:,5] = parallax_draws[0]
-                    
-                    return result             
-                
                 def lnpost_previous(walker_ind) -> np.ndarray:
                     params = previous_params[walker_ind]
-                    return lnpost_vector(params,seed=walker_ind)
+                    return lnpost_vector(params,
+                                            n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
+                                            proper_offset_jacs,proper_offset_jac_invs,unique_gaia_offset_inv_covs,use_inds,unique_inds,
+                                            parallax_offset_vector,delta_times,unique_inv_inds,delta_time_identities,global_pm_inv_cov,
+                                            unique_gaia_pm_inv_covs,unique_V_theta_i_inv_dot_theta_i,unique_V_mu_i_inv_dot_mu_i,
+                                            V_mu_global_inv_dot_mu_global,unique_gaia_offsets,unique_gaia_pms,global_pm_mean,
+                                            unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
+                                            global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
+                                            unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                                            seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                 
                 def lnpost_new(walker_ind) -> np.ndarray:
                     params = new_params[walker_ind]
-                    return lnpost_vector(params,seed=walker_ind)   
-                
-                def lnpost_new_parallel(walker_inds,step_ind,out_q):
-                    output = np.zeros((len(walker_inds),len(unique_ids),5+1))
-                    for count,w_ind in enumerate(walker_inds):
-                        params = new_params[w_ind]
-                        output[count] = lnpost_vector(params,seed=w_ind+(step_ind+1)*(nwalkers_sample+1))
-                    out_q.put(output)
-                    return
-                
+                    return lnpost_vector(params,
+                                            n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
+                                            proper_offset_jacs,proper_offset_jac_invs,unique_gaia_offset_inv_covs,use_inds,unique_inds,
+                                            parallax_offset_vector,delta_times,unique_inv_inds,delta_time_identities,global_pm_inv_cov,
+                                            unique_gaia_pm_inv_covs,unique_V_theta_i_inv_dot_theta_i,unique_V_mu_i_inv_dot_mu_i,
+                                            V_mu_global_inv_dot_mu_global,unique_gaia_offsets,unique_gaia_pms,global_pm_mean,
+                                            unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
+                                            global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
+                                            unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                                            seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
+                                
                 for w_ind in range(nwalkers_sample):
                     vals = lnpost_previous(w_ind)
                     pos_lnpost[w_ind] = vals[0,0]
@@ -1646,7 +1662,7 @@ def analyse_images(image_list,field,path,
                     pos_parallaxes[w_ind] = curr_parallax_draw
                     pos_pms[w_ind] = curr_pm_draw
                     pos_offsets[w_ind] = curr_pos_offset_draw
-    
+                        
     #            print('lnpost',pos_lnpost.min(),pos_lnpost.max(),np.nanmedian(pos_lnpost))
                 
                 stretch_val = 1.0
@@ -1656,7 +1672,7 @@ def analyse_images(image_list,field,path,
                 update_mvn_size = 10
                 
                 for step_ind,_ in enumerate(tqdm(step_inds,total=nsteps)):                
-    #                np.random.seed(step_ind)
+                    np.random.seed(step_ind)
                     if step_ind == 0:
                         previous_params = pos
                         previous_lnpost = pos_lnpost
@@ -1723,7 +1739,7 @@ def analyse_images(image_list,field,path,
                         new_params /= samp_mult*walker_mults[None,:]
                         # print(new_params[0])
                     else:
-                        #use stretch move for the first fitting iteration
+                        #use stretch move for the first fitting iteration, code from DFM's emcee
                         n_splits = 2
                         randomize_split = True
 #                        live_dangerously = False
@@ -1793,42 +1809,51 @@ def analyse_images(image_list,field,path,
 ##                                # new_vals = executor.submit(lnpost_new, walker_ind)
 ##                                new_vals[walker_ind] = vals
                     
+                        out_q = mp.Queue()
+                        chunksize = int(math.ceil(len(walker_inds) / float(n_threads)))
+                        procs = []
+                        
+                        for thread_ind in range(n_threads):
+                            args = (walker_inds[chunksize * thread_ind:chunksize * (thread_ind + 1)],thread_ind,
+                                    new_params,nwalkers_sample,step_ind,
+                                    n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
+                                    proper_offset_jacs,proper_offset_jac_invs,unique_gaia_offset_inv_covs,use_inds,unique_inds,
+                                    parallax_offset_vector,delta_times,unique_inv_inds,delta_time_identities,global_pm_inv_cov,
+                                    unique_gaia_pm_inv_covs,unique_V_theta_i_inv_dot_theta_i,unique_V_mu_i_inv_dot_mu_i,
+                                    V_mu_global_inv_dot_mu_global,unique_gaia_offsets,unique_gaia_pms,global_pm_mean,
+                                    unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
+                                    global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
+                                    unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                                    out_q)
+                            p = mp.Process(target=lnpost_new_parallel,
+                                           args=args)
+                            procs.append(p)
+                            p.start()
                     
-#                        out_q = mp.Queue()
-#                        chunksize = int(math.ceil(len(walker_inds) / float(n_threads)))
-#                        procs = []
-#                                            
-#                        for thread_ind in range(n_threads):
-#                            p = mp.Process(
-#                                    target=lnpost_new_parallel,
-#                                    args=(walker_inds[chunksize * thread_ind:chunksize * (thread_ind + 1)],
-#                                          step_ind,out_q))
-#                            procs.append(p)
-#                            p.start()
-#                    
-#                        new_vals = np.zeros((len(walker_inds),len(unique_ids),5+1))
-#                        for thread_ind in range(n_threads):
-#                            new_vals[chunksize * thread_ind:chunksize * (thread_ind + 1)] = out_q.get()
-#                    
-#                        for p in procs:
-#                            p.join()
+                        new_vals = np.zeros((len(walker_inds),len(unique_ids),5+1))
+                        for thread_ind in range(n_threads):
+                            vals,curr_thread = out_q.get()
+                            new_vals[chunksize * curr_thread:chunksize * (curr_thread + 1)] = vals
+                    
+                        for p in procs:
+                            p.join()
                                         
-#                        if n_images > 1:
-                        if False:
-                            with Pool(processes=n_threads) as pool:
-#                            with MultiPool(processes=n_threads) as pool:
-                            # with get_context("spawn").Pool() as pool:
-                                new_vals = pool.map(lnpost_new,walker_inds)
-                                # new_vals = pool.map(lnpost_new,walker_inds,chunksize=1)
-                                # new_vals = pool.map(lnpost_new,walker_inds,chunksize=len(walker_inds)//n_threads)
-                        else:
-                            new_vals = np.zeros((len(walker_inds),len(unique_ids),5+1))
-                            with ThreadPoolExecutor(n_threads) as executor:
-                                for walker_ind in walker_inds:
-                                    vals = executor.submit(lnpost_new, walker_ind).result()
-                                    new_vals[walker_ind] = vals
-#                                for walker_ind,vals in enumerate(executor.map(lnpost_new, walker_inds)):
+##                        if n_images > 1:
+#                        if False:
+#                            with Pool(processes=n_threads) as pool:
+##                            with MultiPool(processes=n_threads) as pool:
+#                            # with get_context("spawn").Pool() as pool:
+#                                new_vals = pool.map(lnpost_new,walker_inds)
+#                                # new_vals = pool.map(lnpost_new,walker_inds,chunksize=1)
+#                                # new_vals = pool.map(lnpost_new,walker_inds,chunksize=len(walker_inds)//n_threads)
+#                        else:
+#                            new_vals = np.zeros((len(walker_inds),len(unique_ids),5+1))
+#                            with ThreadPoolExecutor(n_threads) as executor:
+#                                for walker_ind in walker_inds:
+#                                    vals = executor.submit(lnpost_new, walker_ind).result()
 #                                    new_vals[walker_ind] = vals
+##                                for walker_ind,vals in enumerate(executor.map(lnpost_new, walker_inds)):
+##                                    new_vals[walker_ind] = vals
                                                             
                     new_vals = np.array(new_vals)
 #                    print(new_vals)
@@ -1848,7 +1873,8 @@ def analyse_images(image_list,field,path,
                     accepted_offsets[accepted] = new_offsets[accepted]
                     
                     accept_fracs[step_ind] = np.sum(accepted)/len(accepted)
-#                    print(step_ind,accept_fracs[step_ind])
+#                    print(accept_fracs[step_ind],lnpdiff.min(),lnpdiff.max(),np.median(lnpdiff))
+#                    print(new_vals[:,0,0])
                     
                     samplerChain[:,step_ind] = accepted_params[:nwalkers]
                     lnposts[:,step_ind] = accepted_lnposts[:nwalkers]
@@ -3989,8 +4015,6 @@ def analyse_images(image_list,field,path,
             
     return
 
-
-# In[ ]:
                 
 
 
@@ -4086,10 +4110,6 @@ def offset_jac(ra,dec,ra0,dec0):
     return jac
 
 
-# def lnpost_new(walker_ind,new_vals):
-#     params = new_params[walker_ind]
-#     new_vals.put(lnpost_vector(params))
-
     # In[2]:
 
 if __name__ == '__main__':
@@ -4104,7 +4124,7 @@ if __name__ == '__main__':
 #    # n_threads = 1
     
     n_threads = cpu_count()
-    n_threads = 1
+    n_threads = 4
     # n_threads = 1
     print(f'Using {n_threads} CPU(s)')
         
@@ -4119,17 +4139,17 @@ if __name__ == '__main__':
 #                   field,path,
 #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
 ##    analyse_images(['j8pu0bswq','j8pu0bsyq'],
-#    analyse_images(['j8pu0bswq','j8pu0bt1q'],
-#                   field,path,
-#                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+    analyse_images(['j8pu0bswq','j8pu0bt1q'],
+                   field,path,
+                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
 #    analyse_images(['j8pu0bswq','j8pu0bsyq','j8pu0bt1q','j8pu0bt5q'],
 #                   field,path,
 #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
     
     
     
-    all_image_analysis(field,path,
-                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+#    all_image_analysis(field,path,
+#                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
 
 
 
