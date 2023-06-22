@@ -58,6 +58,7 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # export VECLIB_MAXIMUM_THREADS=4
 os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
 curr_scripts_dir = os.path.dirname(os.path.abspath(__file__))
+n_max_threads = BPM.n_max_threads
 
 def gaiahub_BPMs(argv):  
     """
@@ -65,9 +66,9 @@ def gaiahub_BPMs(argv):
     """
        
     examples = '''Examples:
-       
-    gaiahub_BPMs --name "Fornax_dSph"
         
+    python GaiaHub_BPPPM.py --name "Fornax_dSph"
+               
     '''
 
     parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter, usage='%(prog)s [options]', 
@@ -83,10 +84,16 @@ def gaiahub_BPMs(argv):
                         help='Path to GaiaHub results.')
     parser.add_argument('--overwrite', 
                         action='store_true',
+                        default=False,
                         help = 'Overwrite any previous results.')
     parser.add_argument('--overwrite_GH', 
                         action='store_true', 
+                        default=False,
                         help = 'Overwrite the GaiaHub summaries used for the Bayesian analysis.')
+    parser.add_argument('--individual_fit_only', 
+                        action='store_true', 
+                        default=False,
+                        help = 'When looping over multiple images, only consider each image separately (do not fit together). Default False.')
     parser.add_argument('--repeat_first_fit', 
                         action='store_true', 
                         default=True,
@@ -111,6 +118,10 @@ def gaiahub_BPMs(argv):
     parser.add_argument('--max_images', type=int, 
                         default = 10, 
                         help='Maximum number of allowed images to be fit together at the same time. Default 10.')
+    
+    parser.add_argument('--n_processes', type = int, 
+                        default = n_max_threads, 
+                        help='The number of jobs to run in parallel. Default uses all the available processors. For single-threaded execution use 1.')
    
     if len(argv)==0:
         parser.print_help(sys.stderr)
@@ -127,6 +138,8 @@ def gaiahub_BPMs(argv):
     max_images = args.max_images
     redo_without_outliers = args.repeat_first_fit
     plot_indv_star_pms = args.plot_indv_star_pms
+    n_threads = args.n_processes
+    individual_fit_only = args.individual_fit_only
     
     #probably want to figure out how to ask the user for a thresh_time
     thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
@@ -148,6 +161,12 @@ def gaiahub_BPMs(argv):
                                         overwrite_previous=overwrite_previous,
                                         overwrite_GH_summaries=overwrite_GH_summaries,
                                         thresh_time=thresh_time)
+        if individual_fit_only:
+            temp_list = []
+            for entry in linked_image_list:
+                if len(entry) == 1:
+                    temp_list.append(entry)
+            linked_image_list = temp_list
         
         for entry_ind,entry in enumerate(linked_image_list):
             print(f'\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
@@ -181,7 +200,7 @@ def gaiahub_BPMs(argv):
             #to prevent a creep of memory leak (probably from numpy) that 
             #uses up all the RAM and slows down the calculations significantly
             os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
-                      f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} "+\
+                      f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
                       f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}")
             
                         
@@ -194,7 +213,8 @@ def gaiahub_BPMs(argv):
 #                           max_images=max_images,
 #                           redo_without_outliers=redo_without_outliers,
 #                           max_stars=max_stars,
-#                           plot_indv_star_pms=plot_indv_star_pms)
+#                           plot_indv_star_pms=plot_indv_star_pms,
+#                            n_threads = n_threads)
             gc.collect()
         
 
@@ -208,7 +228,8 @@ def gaiahub_BPMs(argv):
                        max_images=max_images,
                        redo_without_outliers=redo_without_outliers,
                        max_stars=max_stars,
-                       plot_indv_star_pms=plot_indv_star_pms)
+                       plot_indv_star_pms=plot_indv_star_pms,
+                       n_threads = n_threads)
 
     return 
 
@@ -256,16 +277,19 @@ if __name__ == '__main__':
         
         path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
         overwrite_previous = True
-        overwrite_GH_summaries = True
+        overwrite_GH_summaries = False
         n_fit_max = 3
         max_stars = 2000
         max_images = 10
         redo_without_outliers = True
         plot_indv_star_pms = True
+        n_threads = n_max_threads
+        
+        individual_fit_only = False
+        individual_fit_only = True
         
         #probably want to figure out how to ask the user for a thresh_time, but for now, it is the last time I changed the main code
         thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-        
         
         image_names = 'y'
         
@@ -274,9 +298,16 @@ if __name__ == '__main__':
                                             overwrite_previous=overwrite_previous,
                                             overwrite_GH_summaries=overwrite_GH_summaries,
                                             thresh_time=thresh_time)
+            if individual_fit_only:
+                temp_list = []
+                for entry in linked_image_list:
+                    if len(entry) == 1:
+                        temp_list.append(entry)
+                linked_image_list = temp_list
+            
             
             for entry_ind,entry in enumerate(linked_image_list):
-                print(f'\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
+                print(f'\n\n\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
                 
                 #check if previous analysis exists
                 image_name = '_'.join(entry)
@@ -307,7 +338,7 @@ if __name__ == '__main__':
                 #to prevent a creep of memory leak (probably from numpy) that 
                 #uses up all the RAM and slows down the calculations significantly
                 os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
-                          f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} "+\
+                          f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
                           f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}")
             
 

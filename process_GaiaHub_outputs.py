@@ -48,7 +48,7 @@ matplotlib.rc('font', **font)
 gaia_dr3_date = '2017-05-28'
 gaia_dr3_time = Time(gaia_dr3_date)
 
-pixel_scale_ratios = {'ACS':50,'WFC3':40} #mas/pixel
+pixel_scale_ratios = {'ACS':50,'WFC3':40,'ROMAN':110} #mas/pixel
 
 def get_matrix_params(on_skew,off_skew,ratio,rot):
     '''
