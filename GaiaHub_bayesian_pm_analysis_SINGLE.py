@@ -6,6 +6,12 @@
 
 import os
 import math
+import gc
+gc.enable()
+import argparse
+import sys
+import warnings
+warnings.filterwarnings("ignore")
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -42,18 +48,13 @@ from concurrent.futures import ProcessPoolExecutor
 import process_GaiaHub_outputs as process_GH
 
 
-import argparse
-import warnings
-import sys
-warnings.filterwarnings("ignore")
-
 os.environ["OMP_NUM_THREADS"] = "1" # export OMP_NUM_THREADS=4
 os.environ["OPENBLAS_NUM_THREADS"] = "1" # export OPENBLAS_NUM_THREADS=4 
 os.environ["MKL_NUM_THREADS"] = "1" # export MKL_NUM_THREADS=6
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # export VECLIB_MAXIMUM_THREADS=4
 os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
-def gaiahub_BPMs(argv):  
+def gaiahub_single_BPMs(argv):  
     """
     Inputs
     """
@@ -89,12 +90,10 @@ def gaiahub_BPMs(argv):
                         action='store_true', 
                         default=True,
                         help = 'Plot the PM measurments for individual stars. Good for diagnostics.')
-    parser.add_argument('--image_names', type=str, 
+    parser.add_argument('--image_list', type=str, 
                         nargs='+', 
-                        default = "y", 
-                        help='Specify the HST image names to analyze.'+\
-                             ' The default value, "y", will analyze all HST images in a directory (first separately, then combined).'+\
-                             ' The user can also specify image names separated by spaces.')
+                        default = [None], 
+                        help='Specify the list of HST image name to analyze together.')
     
     parser.add_argument('--max_iterations', type=int, 
                         default = 3, 
@@ -115,7 +114,7 @@ def gaiahub_BPMs(argv):
     path = args.path
     overwrite_previous = args.overwrite
     overwrite_GH_summaries = args.overwrite_GH
-    image_names = args.image_names
+    image_list = args.image_list
     n_fit_max = args.max_iterations
     max_stars = args.max_sources
     max_images = args.max_images
@@ -129,30 +128,22 @@ def gaiahub_BPMs(argv):
     
 #    print('image_names',image_names)
         
-    if (image_names == "y") or (image_names == "Y"):
-        #then analyse all the images in a field along a path
-        all_image_analysis(field,path,
-                           overwrite_previous=overwrite_previous,
-                           overwrite_GH_summaries=overwrite_GH_summaries,
-                           thresh_time=thresh_time,
-                           n_fit_max=n_fit_max,
-                           max_images=max_images,
-                           redo_without_outliers=redo_without_outliers,
-                           max_stars=max_stars,
-                           plot_indv_star_pms=plot_indv_star_pms)
-    else:
-        analyse_images(image_names,
-                       field,path,
-                       overwrite_previous=overwrite_previous,
-                       overwrite_GH_summaries=overwrite_GH_summaries,
-                       thresh_time=thresh_time,
-                       n_fit_max=n_fit_max,
-                       max_images=max_images,
-                       redo_without_outliers=redo_without_outliers,
-                       max_stars=max_stars,
-                       plot_indv_star_pms=plot_indv_star_pms)
+    print()
+        
+    analyse_images(image_list,
+                   field,path,
+                   overwrite_previous=overwrite_previous,
+                   overwrite_GH_summaries=overwrite_GH_summaries,
+                   thresh_time=thresh_time,
+                   n_fit_max=n_fit_max,
+                   max_images=max_images,
+                   redo_without_outliers=redo_without_outliers,
+                   max_stars=max_stars,
+                   plot_indv_star_pms=plot_indv_star_pms)
 
     return 
+
+
 
 
 font = {'family' : 'serif',
@@ -168,13 +159,13 @@ pixel_scale_ratios = {'ACS':50,'WFC3':40} #mas/pixel
 get_matrix_params = process_GH.get_matrix_params
 correlation_names = process_GH.correlation_names
 
-def all_image_analysis(field,path,
-                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0,
-                       n_fit_max=3,max_images=10,redo_without_outliers=True,max_stars=2000,
-                       plot_indv_star_pms=True):
+def link_images(field,path,
+                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0):
     '''
     
     '''
+    
+    print(f'Reading in GaiaHub summaries for field {field} to determine how HST images are linked together.')
     
     outpath = f'{path}{field}/Bayesian_PMs/'
     if (not os.path.isfile(f'{outpath}gaiahub_image_transformation_summaries.csv')) or (overwrite_GH_summaries):
@@ -235,15 +226,15 @@ def all_image_analysis(field,path,
             if not found_match:
                 #then make a new entry
                 linked_image_list.append(full_linked_images[image_name])
+    print(f'Found {len(linked_image_list)} sets of linked HST images.')
+                
     for image_ind,image_name in enumerate(image_names):
         if [image_name] not in linked_image_list:
             linked_image_list.insert(image_ind,[image_name])
-    for entry in linked_image_list:
-        analyse_images(entry,field,path,overwrite_previous,overwrite_GH_summaries,thresh_time,
-                       n_fit_max,max_images,redo_without_outliers,max_stars,
-                       plot_indv_star_pms)
-        
-    return 
+    print(f'Must perform {len(linked_image_list)} analyses.')
+    print()
+    
+    return linked_image_list
 
 
 def lnpost_vector(params,
@@ -746,7 +737,7 @@ def analyse_images(image_list,field,path,
                     ave_val = np.sum(vals*weights)
                     ave_param_vals[param] = ave_val
                 data_combined[mask_name]['avg_params'] = ave_param_vals
-        
+
                 for j,orig_ind in enumerate(keep_im_nums):
             #     for j in n_images:
                     x_hst_err = indv_image_source_data[mask_name]['x_hst_err'][orig_ind]
@@ -3684,120 +3675,120 @@ def analyse_images(image_list,field,path,
     #                  np.round(np.percentile(parallax_samps[:,star_ind]*parallax_offset_vector[star_ind,1],[16,50,84]),5))
                 print()
                 
-                n_plot_walkers = min(50,nwalkers)
-                chosen_walker_inds = np.random.choice(nwalkers,size=n_plot_walkers,replace=False)
-            
-                curr_samplerChain = samplerChain[chosen_walker_inds]
-            #     curr_samplerChain = 
-                
-                plt.figure(figsize=[13,9/4*5])
-                plt.subplot(5,1,1)
-            #         vals = curr_samplerChain[:,:,ndim_trans+star_ind*3].T-true_pm_xs[star_ind]
-                vals = samplerChain_pms[chosen_walker_inds,:,star_ind,0].T
-                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
-                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
-                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])        
-                plt.ylim(ylim)
-                plt.plot(vals,alpha=0.25)
-                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
-                plt.gca().set_xticklabels([])
-                plt.ylabel(r'$\mu_{\mathrm{RA}}$ (mas/yr)')
-                plt.axvline(x=burnin,lw=2,ls='--',c='r')
-                plt.axhline(y=gaia_pms[unique_inds[star_ind],0],lw=2,ls='--',c='C0')
-                
-                plt.subplot(5,1,2)
-            #         vals = curr_samplerChain[:,:,ndim_trans+star_ind*3+1].T-true_pm_ys[star_ind]
-                vals = samplerChain_pms[chosen_walker_inds,:,star_ind,1].T
-                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
-                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
-                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])        
-                plt.ylim(ylim)        
-                plt.plot(vals,alpha=0.25)
-                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
-                plt.ylabel(r'$\mu_{\mathrm{Dec}}$ (mas/yr)')
-                plt.axvline(x=burnin,lw=2,ls='--',c='r')
-                plt.axhline(y=gaia_pms[unique_inds[star_ind],1],lw=2,ls='--',c='C0')
-                
-                plt.subplot(5,1,3)
-            #         vals = np.exp(curr_samplerChain[:,:,ndim_trans+star_ind*3+2].T)-true_parallaxes[star_ind]
-                vals = samplerChain_parallaxes[chosen_walker_inds,:,star_ind].T
-                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
-                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
-                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])   
-                plt.ylim(ylim)        
-                plt.plot(vals,alpha=0.25)
-                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
-                plt.ylabel(r'plx (mas)')
-                plt.axvline(x=burnin,lw=2,ls='--',c='r')
-                plt.axhline(y=gaia_parallaxes[unique_inds[star_ind]],lw=2,ls='--',c='C0')
-                plt.gca().set_xticklabels([])
-    
-                plt.subplot(5,1,4)
-            #         vals = np.exp(curr_samplerChain[:,:,ndim_trans+star_ind*3+2].T)-true_parallaxes[star_ind]
-                vals = samplerChain_offsets[chosen_walker_inds,:,star_ind,0].T
-                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
-                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
-                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])   
-                plt.ylim(ylim)        
-                plt.plot(vals,alpha=0.25)
-                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
-                plt.ylabel(r'$\Delta\mathrm{RA}$ (mas)')
-                plt.axvline(x=burnin,lw=2,ls='--',c='r')
-                plt.axhline(y=0,lw=2,ls='--',c='C0')
-                plt.gca().set_xticklabels([])
-    
-                plt.subplot(5,1,5)
-            #         vals = np.exp(curr_samplerChain[:,:,ndim_trans+star_ind*3+2].T)-true_parallaxes[star_ind]
-                vals = samplerChain_offsets[chosen_walker_inds,:,star_ind,1].T
-                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
-                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
-                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])   
-                plt.ylim(ylim)        
-                plt.plot(vals,alpha=0.25)
-                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
-                plt.ylabel(r'$\Delta\mathrm{Dec}$ (mas)')
-                plt.axvline(x=burnin,lw=2,ls='--',c='r')
-                plt.axhline(y=0,lw=2,ls='--',c='C0')                        
-                plt.xlabel('Step Number')
-                #plt.tight_layout()
-                plt.close('all')
-                # plt.show()
-            
-            #         corner.corner(np.array([pm_x_samps[:,star_ind]-true_pm_xs[star_ind],
-            #                                 pm_y_samps[:,star_ind]-true_pm_ys[star_ind],
-            #                                 np.log10(parallax_samps[:,star_ind])]).T, 
-            #               labels=[r'$\Delta\mu_x$',r'$\Delta\mu_y$',r'$\log_{10}\Delta$plx (mas)'], 
-            #               quantiles=[0.16, 0.5, 0.84], show_titles=True,
-            #               title_kwargs={"fontsize": 12},bins=10,
-            #               truths=[0,0,np.log10(true_parallaxes[star_ind])])
-            #         parallax_offset_x_samps = parallax_samps[:,star_ind]*parallax_offset_vector[star_ind,0]
-            #         parallax_offset_y_samps = parallax_samps[:,star_ind]*parallax_offset_vector[star_ind,1]
-            #         corner.corner(np.array([pm_x_samps[:,star_ind]-true_pm_xs[star_ind],
-            #                                 pm_y_samps[:,star_ind]-true_pm_ys[star_ind],
-            #                                 parallax_offset_x_samps,
-            #                                 parallax_offset_y_samps]).T, 
-            #               labels=[r'$\Delta\mu_x$',r'$\Delta\mu_y$',\
-            #                       r'$\Delta x_{\mathrm{plx}}$ (mas)',r'$\Delta y_{\mathrm{plx}}$ (mas)'], 
-            #               quantiles=[0.16, 0.5, 0.84], show_titles=True,
-            #               title_kwargs={"fontsize": 12},bins=10,
-            #               truths=[0,0,\
-            #                       true_offset_vectors[star_ind,0],\
-            #                       true_offset_vectors[star_ind,1]])
-                
-                corner.corner(np.array([pm_x_samps[:,star_ind],
-                                        pm_y_samps[:,star_ind],
-                                        parallax_samps[:,star_ind],
-                                        offset_x_samps[:,star_ind],
-                                        offset_y_samps[:,star_ind]]).T, 
-                      labels=[r'$\mu_{\mathrm{RA}}$',r'$\mu_{\mathrm{Dec}}$',r'plx',\
-                              r'$\Delta\mathrm{RA}$',r'$\Delta\mathrm{Dec}$'], 
-                      quantiles=[0.16, 0.5, 0.84], show_titles=True,
-                      title_kwargs={"fontsize": 12},bins=10,
-                      truths=[gaia_pm_xs[unique_inds[star_ind]],gaia_pm_ys[unique_inds[star_ind]],\
-                              gaia_parallaxes[unique_inds[star_ind]],0,0])
-            
-                plt.close('all')
-                # plt.show()
+#                n_plot_walkers = min(50,nwalkers)
+#                chosen_walker_inds = np.random.choice(nwalkers,size=n_plot_walkers,replace=False)
+#            
+#                curr_samplerChain = samplerChain[chosen_walker_inds]
+#            #     curr_samplerChain = 
+#                
+#                plt.figure(figsize=[13,9/4*5])
+#                plt.subplot(5,1,1)
+#            #         vals = curr_samplerChain[:,:,ndim_trans+star_ind*3].T-true_pm_xs[star_ind]
+#                vals = samplerChain_pms[chosen_walker_inds,:,star_ind,0].T
+#                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
+#                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
+#                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])        
+#                plt.ylim(ylim)
+#                plt.plot(vals,alpha=0.25)
+#                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
+#                plt.gca().set_xticklabels([])
+#                plt.ylabel(r'$\mu_{\mathrm{RA}}$ (mas/yr)')
+#                plt.axvline(x=burnin,lw=2,ls='--',c='r')
+#                plt.axhline(y=gaia_pms[unique_inds[star_ind],0],lw=2,ls='--',c='C0')
+#                
+#                plt.subplot(5,1,2)
+#            #         vals = curr_samplerChain[:,:,ndim_trans+star_ind*3+1].T-true_pm_ys[star_ind]
+#                vals = samplerChain_pms[chosen_walker_inds,:,star_ind,1].T
+#                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
+#                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
+#                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])        
+#                plt.ylim(ylim)        
+#                plt.plot(vals,alpha=0.25)
+#                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
+#                plt.ylabel(r'$\mu_{\mathrm{Dec}}$ (mas/yr)')
+#                plt.axvline(x=burnin,lw=2,ls='--',c='r')
+#                plt.axhline(y=gaia_pms[unique_inds[star_ind],1],lw=2,ls='--',c='C0')
+#                
+#                plt.subplot(5,1,3)
+#            #         vals = np.exp(curr_samplerChain[:,:,ndim_trans+star_ind*3+2].T)-true_parallaxes[star_ind]
+#                vals = samplerChain_parallaxes[chosen_walker_inds,:,star_ind].T
+#                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
+#                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
+#                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])   
+#                plt.ylim(ylim)        
+#                plt.plot(vals,alpha=0.25)
+#                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
+#                plt.ylabel(r'plx (mas)')
+#                plt.axvline(x=burnin,lw=2,ls='--',c='r')
+#                plt.axhline(y=gaia_parallaxes[unique_inds[star_ind]],lw=2,ls='--',c='C0')
+#                plt.gca().set_xticklabels([])
+#    
+#                plt.subplot(5,1,4)
+#            #         vals = np.exp(curr_samplerChain[:,:,ndim_trans+star_ind*3+2].T)-true_parallaxes[star_ind]
+#                vals = samplerChain_offsets[chosen_walker_inds,:,star_ind,0].T
+#                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
+#                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
+#                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])   
+#                plt.ylim(ylim)        
+#                plt.plot(vals,alpha=0.25)
+#                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
+#                plt.ylabel(r'$\Delta\mathrm{RA}$ (mas)')
+#                plt.axvline(x=burnin,lw=2,ls='--',c='r')
+#                plt.axhline(y=0,lw=2,ls='--',c='C0')
+#                plt.gca().set_xticklabels([])
+#    
+#                plt.subplot(5,1,5)
+#            #         vals = np.exp(curr_samplerChain[:,:,ndim_trans+star_ind*3+2].T)-true_parallaxes[star_ind]
+#                vals = samplerChain_offsets[chosen_walker_inds,:,star_ind,1].T
+#                val_bounds = np.percentile(np.ravel(vals[burnin:]),[16,50,84])
+#                val_bounds = np.array([val_bounds[1],val_bounds[1]-val_bounds[0],val_bounds[2]-val_bounds[1]])
+#                ylim = (val_bounds[0]-5*val_bounds[1],val_bounds[0]+5*val_bounds[2])   
+#                plt.ylim(ylim)        
+#                plt.plot(vals,alpha=0.25)
+#                plt.xticks(np.arange(0, curr_samplerChain.shape[1]+1, curr_samplerChain.shape[1]/10).astype(int))
+#                plt.ylabel(r'$\Delta\mathrm{Dec}$ (mas)')
+#                plt.axvline(x=burnin,lw=2,ls='--',c='r')
+#                plt.axhline(y=0,lw=2,ls='--',c='C0')                        
+#                plt.xlabel('Step Number')
+#                #plt.tight_layout()
+#                plt.close('all')
+#                # plt.show()
+#            
+#            #         corner.corner(np.array([pm_x_samps[:,star_ind]-true_pm_xs[star_ind],
+#            #                                 pm_y_samps[:,star_ind]-true_pm_ys[star_ind],
+#            #                                 np.log10(parallax_samps[:,star_ind])]).T, 
+#            #               labels=[r'$\Delta\mu_x$',r'$\Delta\mu_y$',r'$\log_{10}\Delta$plx (mas)'], 
+#            #               quantiles=[0.16, 0.5, 0.84], show_titles=True,
+#            #               title_kwargs={"fontsize": 12},bins=10,
+#            #               truths=[0,0,np.log10(true_parallaxes[star_ind])])
+#            #         parallax_offset_x_samps = parallax_samps[:,star_ind]*parallax_offset_vector[star_ind,0]
+#            #         parallax_offset_y_samps = parallax_samps[:,star_ind]*parallax_offset_vector[star_ind,1]
+#            #         corner.corner(np.array([pm_x_samps[:,star_ind]-true_pm_xs[star_ind],
+#            #                                 pm_y_samps[:,star_ind]-true_pm_ys[star_ind],
+#            #                                 parallax_offset_x_samps,
+#            #                                 parallax_offset_y_samps]).T, 
+#            #               labels=[r'$\Delta\mu_x$',r'$\Delta\mu_y$',\
+#            #                       r'$\Delta x_{\mathrm{plx}}$ (mas)',r'$\Delta y_{\mathrm{plx}}$ (mas)'], 
+#            #               quantiles=[0.16, 0.5, 0.84], show_titles=True,
+#            #               title_kwargs={"fontsize": 12},bins=10,
+#            #               truths=[0,0,\
+#            #                       true_offset_vectors[star_ind,0],\
+#            #                       true_offset_vectors[star_ind,1]])
+#                
+#                corner.corner(np.array([pm_x_samps[:,star_ind],
+#                                        pm_y_samps[:,star_ind],
+#                                        parallax_samps[:,star_ind],
+#                                        offset_x_samps[:,star_ind],
+#                                        offset_y_samps[:,star_ind]]).T, 
+#                      labels=[r'$\mu_{\mathrm{RA}}$',r'$\mu_{\mathrm{Dec}}$',r'plx',\
+#                              r'$\Delta\mathrm{RA}$',r'$\Delta\mathrm{Dec}$'], 
+#                      quantiles=[0.16, 0.5, 0.84], show_titles=True,
+#                      title_kwargs={"fontsize": 12},bins=10,
+#                      truths=[gaia_pm_xs[unique_inds[star_ind]],gaia_pm_ys[unique_inds[star_ind]],\
+#                              gaia_parallaxes[unique_inds[star_ind]],0,0])
+#            
+#                plt.close('all')
+#                # plt.show()
                 break
                 
             #think about showing the change in pixel position (mas) from parallax instead of the parallax amount
@@ -4144,6 +4135,143 @@ def analyse_images(image_list,field,path,
 #            plt.close('all')
 #            # plt.show()
             
+    if not skip_fitting:
+        del samplerChain
+        del samples
+        del lnposts
+        del accept_fracs
+        
+        del sample_lnposts
+        del sample_parallaxes
+        del sample_pms
+        del sample_offsets
+        del sample_med
+        del sample_cov
+        del best_trans_params
+        del best_trans_param_covs
+        del ags
+        del bgs
+        del cgs
+        del dgs
+        del samples_with_skews
+        del sample_pms_parallax_offsets
+        del data_combined
+        del indv_image_source_data
+        
+        del gaia_id
+        del sort_gaia_id_inds
+        del x
+        del y
+        del x_hst_err
+        del y_hst_err
+        del x_g
+        del y_g
+        del use_for_fit
+        del q_hst
+        del img_nums
+        del indv_orig_pixel_scales
+        del hst_time_strings
+        del hst_times
+        del gaia_time_strings
+        del gaia_times
+        del delta_times
+        del gaia_pm_xs
+        del gaia_pm_ys
+        del gaia_pm_x_errs
+        del gaia_pm_y_errs
+        del gaia_pm_x_y_corrs
+        del gaia_ras
+        del gaia_decs
+        del gaia_ra_errs
+        del gaia_dec_errs
+        del gaia_ra_dec_corrs
+        del gaia_parallaxes
+        del gaia_parallax_errs
+        del gaia_vectors            
+        del gaia_vector_covs    
+    
+        del star_hst_gaia_pos_cov
+        del hst_covs
+        del star_ratios
+        del matrices
+        del matrices_T
+        del star_hst_gaia_pos_inv_cov
+        del proper_offset_jacs
+        del star_hst_gaia_pos
+        del inv_jac_dot_d_ij
+        del summed_jac_V_data_inv_jac
+        del Sigma_theta_i_inv
+        del Sigma_theta_i
+        del parallax_offset_vector
+        del jac_V_data_inv_jac_dot_parallax_vects
+        del summed_jac_V_data_inv_jac_dot_parallax_vects
+        del jac_V_data_inv_jac_dot_d_ij
+        del summed_jac_V_data_inv_jac_dot_d_ij
+        del summed_jac_V_data_inv_jac_times
+        del A_mu_i
+        del C_mu_ij
+        del A_mu_i_inv
+        del C_mu_ij_inv
+        del unique_gaia_offset_inv_covs
+        del unique_gaia_pm_inv_covs
+                        
+        del Sigma_mu_theta_i_inv
+        del Sigma_mu_d_ij_inv
+        del Sigma_mu_i_inv 
+        del Sigma_mu_i
+        del A_plx_mu_i
+        del B_plx_mu_i
+        del Sigma_mu_theta_i_inv_dot_A_mu_i_inv
+        del Sigma_mu_d_ij_inv_dot_C_mu_ij_inv
+        del C_plx_mu_i
+        del D_plx_mu_i
+        del E_plx_theta_i
+        del F_plx_theta_i
+        del G_plx_d_ij
+        del H_plx_d_ij
+        del G_plx_d_ij_T_dot_V_data_inv
+        del ivar_plx_d_ij
+        del mu_times_ivar_plx_d_ij
+        del summed_ivar_plx_d_ij
+        del summed_mu_times_ivar_plx_d_ij
+        del C_plx_mu_i_T_dot_V_mu_i_inv
+        del ivar_plx_mu_i
+        del mu_times_ivar_plx_mu_i
+        del C_plx_mu_i_T_dot_V_mu_global_inv
+        del ivar_plx_mu_global
+        del mu_times_ivar_plx_mu_global
+        del E_plx_theta_i_T_dot_V_theta_i_inv
+        del ivar_plx_theta_i
+        del mu_times_ivar_plx_theta_i
+        del ivar_plx_i
+        del var_plx_i
+        del std_plx_i
+        del mu_plx_i
+        del parallax_draws
+        del B_mu_i
+        del mu_mu_i 
+        del pm_gauss_draws
+        del pm_draws
+        del mu_theta_i
+        del offset_gauss_draws
+        del offset_draws
+        del data_pm_draws
+        del eig_signs
+        del eig_vals
+        del eig_vects
+        del data_gauss_draws
+        del data_draws
+        del pm_data_measures
+        del data_diff_vals
+        del dpixels
+        del dpixels_sigma_dists
+        del new_offset_xy_samps
+        del new_offset_samps
+        del new_offset_sigma_samps
+        del new_offset_summary
+        
+    gc.collect()
+            
     return
 
                 
@@ -4244,39 +4372,38 @@ def offset_jac(ra,dec,ra0,dec0):
     # In[2]:
 
 if __name__ == '__main__':
+    gaiahub_single_BPMs(sys.argv[1:])
+    pass
     
-    testing = False
-#    testing = True
-    
-    if not testing:
-        gaiahub_BPMs(sys.argv[1:])
-    else:
-        overwrite = True
-        overwrite_GH_summaries = False
-        path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
-        
-    #    field = 'Fornax_dSph'
-        field = 'COSMOS_field'
-    
-        thresh_time = ((datetime.datetime(2023,5,22,15,20,38,259741)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-        if field in ['COSMOS_field']:
-            thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-    
-    #    analyse_images(['j8pu0bswq'],
-    #                   field,path,
-    #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
-#        analyse_images(['j8pu0bswq','j8pu0bsyq'],
-#                       field,path,
-#                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
-    #    analyse_images(['j8pu0bswq','j8pu0bsyq','j8pu0bt1q','j8pu0bt5q'],
-    #                   field,path,
-    #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
-        
-        
-        
-        all_image_analysis(field,path,
-                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
-    
+#    testing = False
+##    testing = True
+#    
+#    if not testing:
+#        gaiahub_BPMs(sys.argv[1:])
+#    else:
+#        overwrite = True
+#        overwrite_GH_summaries = False
+#        path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
+#        
+#    #    field = 'Fornax_dSph'
+#        field = 'COSMOS_field'
+#    
+#        thresh_time = ((datetime.datetime(2023,5,22,15,20,38,259741)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+#        if field in ['COSMOS_field']:
+#            thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+#    
+#    #    analyse_images(['j8pu0bswq'],
+#    #                   field,path,
+#    #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+##        analyse_images(['j8pu0bswq','j8pu0bsyq'],
+##                       field,path,
+##                       overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+#    #    analyse_images(['j8pu0bswq','j8pu0bsyq','j8pu0bt1q','j8pu0bt5q'],
+#    #                   field,path,
+#    #                   overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=thresh_time)
+#        
+#        
+#        
     
 
 
