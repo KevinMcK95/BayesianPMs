@@ -79,7 +79,7 @@ def gaiahub_BPMs(argv):
                         default = 'Output',
                         help='Name of directory to analyze.')
     parser.add_argument('--path', type=str, 
-                        default = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/', 
+                        default = f'{os.getcwd()}/', 
                         help='Path to GaiaHub results.')
     parser.add_argument('--overwrite', 
                         action='store_true',
@@ -129,9 +129,7 @@ def gaiahub_BPMs(argv):
     plot_indv_star_pms = args.plot_indv_star_pms
     
     #probably want to figure out how to ask the user for a thresh_time
-    thresh_time = ((datetime.datetime(2023,5,22,15,20,38,259741)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-    if field in ['COSMOS_field']:
-        thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+    thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
     
 #    print('image_names',image_names)
         
@@ -222,5 +220,95 @@ if __name__ == '__main__':
     
     if not testing:
         gaiahub_BPMs(sys.argv[1:])
+        
+    else:
+        fields = [
+        '47Tuc',
+        'Arp2',
+        'COSMOS_field',
+        'DDO_216',
+        'Draco_dSph',
+        'E3',
+        'Fornax_dSph',
+        'IC_10',
+        'Leo_I',
+        'LMC',
+        'M31',
+        'NGC_205',
+        'NGC2419',
+        'Pal1',
+        'Pal2',
+        'Pal4',
+        'Pal13',
+        'Pal15',
+        'Sculptor_dSph',
+        'Sextans_dSph',
+        'Terzan8',
+        ]
+        
+        fields = [
+        'Fornax_dSph',
+        'Sculptor_dSph',
+        'Sextans_dSph',
+        'Draco_dSph',
+        '47Tuc',
+        ]
+        
+        path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
+        overwrite_previous = True
+        overwrite_GH_summaries = True
+        n_fit_max = 3
+        max_stars = 2000
+        max_images = 10
+        redo_without_outliers = True
+        plot_indv_star_pms = True
+        
+        #probably want to figure out how to ask the user for a thresh_time, but for now, it is the last time I changed the main code
+        thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+        
+        
+        image_names = 'y'
+        
+        for field in fields:
+            linked_image_list = BPM.link_images(field,path,
+                                            overwrite_previous=overwrite_previous,
+                                            overwrite_GH_summaries=overwrite_GH_summaries,
+                                            thresh_time=thresh_time)
+            
+            for entry_ind,entry in enumerate(linked_image_list):
+                print(f'\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
+                
+                #check if previous analysis exists
+                image_name = '_'.join(entry)
+                outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
+                                    
+                final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
+                if os.path.isfile(final_fig):
+                    file_time = os.path.getmtime(final_fig)
+                    if (file_time > thresh_time) or (not overwrite_previous):
+                        print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
+                        continue
+                
+                entry_list = ' '.join(entry)
+                overwrite_previous_string = ''
+                if overwrite_previous:
+                    overwrite_previous_string = '--overwrite '
+                overwrite_GH_string = ''
+                if overwrite_GH_summaries:
+                    overwrite_GH_string = '--overwrite_GH '
+                repeat_string = ''
+                if redo_without_outliers:
+                    repeat_string = '--repeat_first_fit '
+                plot_string = ''
+                if plot_indv_star_pms:
+                    plot_string = '--plot_indv_star_pms '
+                    
+                #use os.system call so that each image set analysis is separate 
+                #to prevent a creep of memory leak (probably from numpy) that 
+                #uses up all the RAM and slows down the calculations significantly
+                os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
+                          f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} "+\
+                          f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}")
+            
 
 

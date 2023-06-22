@@ -74,8 +74,8 @@ def gaiahub_single_BPMs(argv):
                         default = 'Output',
                         help='Name of directory to analyze.')
     parser.add_argument('--path', type=str, 
-                        default = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/', 
-                        help='Path to GaiaHub results.')
+                        default = f'{os.getcwd()}/', 
+                        help='Path to GaiaHub results. The results should be found along "path/name/".')
     parser.add_argument('--overwrite', 
                         action='store_true',
                         help = 'Overwrite any previous results.')
@@ -122,9 +122,7 @@ def gaiahub_single_BPMs(argv):
     plot_indv_star_pms = args.plot_indv_star_pms
     
     #probably want to figure out how to ask the user for a thresh_time
-    thresh_time = ((datetime.datetime(2023,5,22,15,20,38,259741)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-    if field in ['COSMOS_field']:
-        thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+    thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
     
 #    print('image_names',image_names)
         
@@ -154,8 +152,7 @@ matplotlib.rc('font', **font)
 gaia_dr3_date = '2017-05-28'
 gaia_dr3_time = Time(gaia_dr3_date)
 
-pixel_scale_ratios = {'ACS':50,'WFC3':40} #mas/pixel
-
+pixel_scale_ratios = process_GH.pixel_scale_ratios
 get_matrix_params = process_GH.get_matrix_params
 correlation_names = process_GH.correlation_names
 
@@ -958,9 +955,10 @@ def analyse_images(image_list,field,path,
                 if not os.path.isdir(outpath):
                     os.makedirs(outpath)
                                     
-                star_name = unique_ids[-1]
-                indv_star_path = f'{path}{field}/Bayesian_PMs/{image_name}/indv_stars/'
-                final_fig = f'{indv_star_path}{image_name}_{star_name}_posterior_PM_comparison.png'
+#                star_name = unique_ids[-1]
+#                indv_star_path = f'{path}{field}/Bayesian_PMs/{image_name}/indv_stars/'
+#                final_fig = f'{indv_star_path}{image_name}_{star_name}_posterior_PM_comparison.png'
+                final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
 #                final_fig = f'{outpath}{image_name}_posterior_population_PM_offset_analysis_pop_dist.png'
                 if os.path.isfile(final_fig):
                     file_time = os.path.getmtime(final_fig)
@@ -2710,7 +2708,8 @@ def analyse_images(image_list,field,path,
                         
                     print(f'Plotting comparison of data and prior PMs for each star.')
                     
-                    for star_ind in range(len(pm_x_samps[0])):
+#                    for star_ind in range(len(pm_x_samps[0])):
+                    for star_ind,_ in enumerate(tqdm(pm_x_samps[0],total=len(pm_x_samps[0]))):
                         star_name = unique_ids[star_ind]
                         curr_inds = unique_star_mapping[star_name]
                         
