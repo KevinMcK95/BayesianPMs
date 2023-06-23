@@ -337,7 +337,7 @@ def collect_gaiahub_results(field,
             if len(line) == 0:
                 continue
             elif 'THE FOLLOWING LIMITS FOR HST' in line:
-                saturation_limit = float(line.split('<')[1].split(',')[0])
+                mag_limit = float(line.split('<')[1].split(',')[0])
                 q_hst_limit = float(line.split(',')[1].split('<')[1].split(')')[0])
 #            elif 'Delta_Time' in line:
 #                delta_time = float(line.split(':')[1])
@@ -439,8 +439,8 @@ def collect_gaiahub_results(field,
         dX_G = X_G-X_2
         dY_G = Y_G-Y_2
         q_hst = temp_params[:,3]
-        #stars that shouldn't be used to measure the transformation
-        use_for_fit = (q_hst < q_hst_limit) & (m_hst < saturation_limit)
+        #stars that GaiaHub didn't use to measure the transformation
+        use_for_fit = (q_hst < q_hst_limit) & (m_hst < mag_limit)
         
         ra_gaia = temp_params[:,15]
         dec_gaia = temp_params[:,16]
@@ -480,11 +480,11 @@ def collect_gaiahub_results(field,
             print(f'SKIPPING: Could not find image {image_name} in GaiaHub output files.')
             continue
         
-        #change the q_fit for stars that are saturated to be REALLY big
-        #so that their position uncertainties are huge, and then we can 
-        #use their values for fitting
-        q_hst[~use_for_fit] = 10/0.8 #make the position uncertainty 10 HST pixels
-        use_for_fit[:] = True
+#        #change the q_fit for stars that are saturated to be REALLY big
+#        #so that their position uncertainties are huge, and then we can 
+#        #use their values for fitting
+#        q_hst[~use_for_fit] = 10/0.8 #make the position uncertainty 10 HST pixels
+#        use_for_fit[:] = True
                 
         gaiahub_output_info[mask_name]['X_G'].append(X_G)
         gaiahub_output_info[mask_name]['Y_G'].append(Y_G)

@@ -133,6 +133,7 @@ def gaiahub_single_BPMs(argv):
     
     #probably want to figure out how to ask the user for a thresh_time
     thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+#    thresh_time = ((datetime.datetime(2023, 6, 23, 12, 15, 31, 308307)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
     
 #    print('image_names',image_names)
         
@@ -314,6 +315,56 @@ def lnpost_pop_pms_parallel(walker_inds,nwalkers,thread_ind,new_params,step_ind,
     out_q.put((output,thread_ind))
     return
 
+def transform_jacobian(a,b,c,d):
+    '''
+    Define the jacobian that allows priors to be placed on skew terms, rotation, and scale
+    while fitting for (a,b,c,d) forms
+    '''
+    
+    #on_skew = (a-d)/2
+    #off_skew = (b+c)/2
+    #ratio^2 = a*d-b*c
+    #tan(rot) = (b-c)/(a+d)
+    
+    d_onskew_d_a = 0.5
+    d_onskew_d_b = 0
+    d_onskew_d_c = 0
+    d_onskew_d_d = -0.5
+
+    d_offskew_d_a = 0
+    d_offskew_d_b = 0.5
+    d_offskew_d_c = 0.5
+    d_offskew_d_d = 0
+    
+    atan_arg = (b-c)/(a+d)
+    drot_term = 1/(atan_arg**2+1)
+
+    d_rot_d_a = drot_term*(b-c)*(-1)*((a+d)**(-2))
+    d_rot_d_b = drot_term/(a+d)
+    d_rot_d_c = -1*d_rot_d_b
+    d_rot_d_d = d_rot_d_a
+    
+    dratio_term = 0.5*(a*d-b*c)**(-0.5)
+
+    d_ratio_d_a = dratio_term*d
+    d_ratio_d_b = dratio_term*(-c)
+    d_ratio_d_c = dratio_term*(-b)
+    d_ratio_d_d = dratio_term*a
+    
+    jac_mat = np.array([
+            [d_onskew_d_a,d_onskew_d_b,d_onskew_d_c,d_onskew_d_d],
+            [d_offskew_d_a,d_offskew_d_b,d_offskew_d_c,d_offskew_d_d],
+            [d_rot_d_a,d_rot_d_b,d_rot_d_c,d_rot_d_d],
+            [d_ratio_d_a,d_ratio_d_b,d_ratio_d_c,d_ratio_d_d]
+            ])
+    jac = np.abs(np.linalg.det(jac_mat))
+    return jac
+
+ratio_width = 0.01
+rot_width = 1 #degrees
+on_skew_width = 0.01
+off_skew_width = 0.01
+
 def lnpost_vector(params,
                   n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
                   proper_offset_jacs,proper_offset_jac_invs,unique_gaia_offset_inv_covs,use_inds,unique_inds,
@@ -323,6 +374,7 @@ def lnpost_vector(params,
                   unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                   global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                   unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                  ratio_means,rot_means,on_skew_means,off_skew_means,
                   seed=101,n_pms=1) -> np.ndarray:
 #    print(params)
 #    np.random.seed(seed)
@@ -340,6 +392,11 @@ def lnpost_vector(params,
     dgs = params[5::n_param_indv]
     # x0s = param_outputs[:,0]
     # y0s = param_outputs[:,1]
+
+    rots = np.arctan2(bgs-cgs,ags+dgs)*180/np.pi
+    ratios = np.sqrt(ags*dgs-bgs*cgs)
+    on_skews = 0.5*(ags-dgs)
+    off_skews = 0.5*(bgs+cgs)
 
     # if np.any(np.abs(w0s-param_outputs[:,2]) > 1000) or np.any(np.abs(z0s-param_outputs[:,3]) > 1000):
     #     result = np.zeros((len(unique_ids),5+1))
@@ -363,6 +420,15 @@ def lnpost_vector(params,
     poss_matrices_T[:,0,1] = cgs
     poss_matrices_T[:,1,0] = bgs
     
+    transform_logpriors = np.zeros((len(x0s)))
+    for j in range(len(x0s)):
+        ratio_lp = -0.5*(((ratios[j]-ratio_means[j])/ratio_width)**2)
+        rot_lp = -0.5*(((rots[j]-rot_means[j])/rot_width)**2)
+        on_skew_lp = -0.5*(((on_skews[j]-on_skew_means[j])/on_skew_width)**2)
+        off_skew_lp = -0.5*(((off_skews[j]-off_skew_means[j])/off_skew_width)**2)
+        transform_logpriors[j] = np.log(transform_jacobian(ags[j],bgs[j],cgs[j],dgs[j]))\
+                                 +ratio_lp+rot_lp+on_skew_lp+off_skew_lp
+        
     matrices = poss_matrices[img_nums]
     matrices_T = poss_matrices_T[img_nums]
     wz0s = np.array([w0s,z0s]).T[img_nums]
@@ -525,7 +591,8 @@ def lnpost_vector(params,
             -0.5*np.log(np.linalg.det(Sigma_theta_i))\
             -0.5*np.power(draw_parallax_diff,2)*ivar_plx_i-0.5*np.log(var_plx_i)
                                 
-    logprobs = np.sum((summed_ll+lp-lnorm)[:,unique_keep],axis=1)
+    logprobs = np.sum((summed_ll+lp-lnorm)[:,unique_keep],axis=1)+np.sum(transform_logpriors)
+#    print(lnorm.shape,lnorm[:,unique_keep].shape,logprobs.shape)
     
     if n_pms > 1:
         print(logprobs)
@@ -553,6 +620,7 @@ def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_i
                         unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                         global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                         unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                        ratio_means,rot_means,on_skew_means,off_skew_means,
                         out_q):
     output = np.zeros((len(walker_inds),len(unique_ids),5+1))
     for count,w_ind in enumerate(walker_inds):
@@ -566,6 +634,7 @@ def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_i
                                       unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                                       global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                       unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                                      ratio_means,rot_means,on_skew_means,off_skew_means,
                                       seed=w_ind+(step_ind+1)*(nwalkers_sample+1))
     out_q.put((output,thread_ind))
     return
@@ -582,8 +651,10 @@ def analyse_images(image_list,field,path,
     
     outpath = f'{path}{field}/Bayesian_PMs/'
     if (not os.path.isfile(f'{outpath}gaiahub_image_transformation_summaries.csv')) or (overwrite_GH_summaries):
+        print('Generating new GaiaHub summary files for field {field}.')
         process_GH.collect_gaiahub_results(field,path=path,overwrite=overwrite_GH_summaries)
-
+        process_GH.image_lister(field,path)
+        
     #get the transformation parameters for the images that have been provided
     trans_file_df = pd.read_csv(f'{outpath}gaiahub_image_transformation_summaries.csv')
     allowed_image_names = np.array(trans_file_df['image_name'].to_list())
@@ -934,6 +1005,24 @@ def analyse_images(image_list,field,path,
                 for param in data_combined[mask_name]:
                     data_combined[mask_name][param] = np.array(data_combined[mask_name][param])
                     
+                ratio_means = np.zeros(len(param_outputs))
+                rot_means = np.zeros(len(param_outputs))
+                on_skew_means = np.zeros(len(param_outputs))
+                off_skew_means = np.zeros(len(param_outputs))
+                
+                for j,orig_ind in enumerate(keep_im_nums):
+                    xo,yo,wo,zo,ag,bg,cg,dg,rot_sign = param_outputs[j]
+                    a,b,c,d = ag,bg,cg,dg
+                    ratio = np.sqrt(a*d-b*c)
+                    rot = np.arctan2(b-c,a+d)*180/np.pi
+                    on_skew = 0.5*(a-d)
+                    off_skew = 0.5*(b+c)
+                    
+                    ratio_means[j] = ratio
+                    rot_means[j] = rot
+                    on_skew_means[j] = on_skew
+                    off_skew_means[j] = off_skew
+                    
                 gaia_id = np.copy(data_combined[mask_name]['Gaia_id'])
                 sort_gaia_id_inds = np.argsort(gaia_id)
                 if len(sort_gaia_id_inds) > max_stars:
@@ -969,6 +1058,9 @@ def analyse_images(image_list,field,path,
                 gaia_ra_dec_corrs = np.copy(data_combined[mask_name]['gaia_ra_dec_corr'])[sort_gaia_id_inds] #in mas
                 gaia_parallaxes = np.copy(data_combined[mask_name]['gaia_parallax'])[sort_gaia_id_inds] #in mas
                 gaia_parallax_errs = np.copy(data_combined[mask_name]['gaia_parallax_error'])[sort_gaia_id_inds] #in mas
+                
+                #ignore the GaiaHub choices of stars to include in fitting (i.e. use all possible stars)
+                use_for_fit[:] = True
                 
                 if fit_count == 0:
                     unique_ids,unique_inds,unique_inv_inds,unique_counts = np.unique(gaia_id,return_index=True,
@@ -1179,10 +1271,10 @@ def analyse_images(image_list,field,path,
                     multiplicity[curr_inds] = np.sum(use_inds[curr_inds])
                 n_stars_unique = len(unique_ids)
                 n_used_stars_unique = np.sum(unique_keep)
-                if n_stars_unique == np.sum(unique_missing_prior_PM):
-                    print(f"SKIPPING fit of image {image_name} in {mask_name} because no sources have Gaia priors. The results will be the same as GaiaHub's output.")
-                    skip_fitting = True
-                    break
+#                if n_stars_unique == np.sum(unique_missing_prior_PM):
+#                    print(f"SKIPPING fit of image(s) {image_name} in {mask_name} because no sources have Gaia priors. The results will be the same as GaiaHub's output.")
+#                    skip_fitting = True
+#                    break
                 
     #            if (np.sum(unique_counts > 1) < 5) and (field in ['COSMOS_field']):
     #                print(f'\nSKIPPING {hst_image_names} because of too few matching stars')
@@ -1197,6 +1289,8 @@ def analyse_images(image_list,field,path,
                 print(f"Fitting {n_images} image(s) in {mask_name} using image {hst_image_names}")
                 if fit_count == 0:
                     print(f'Using {n_threads} CPU(s).')
+                    if n_stars_unique == np.sum(unique_missing_prior_PM):
+                        print(f"WARNING: image(s) {image_name} in {mask_name} have no sources with Gaia priors. This will likely impact results.")
                 print(f'Current image(s) have time baselines of {np.round((gaia_mjd-keep_im_mjds)/365,2)} years from Gaia.')
                 print(f'Current image(s) have a total of {n_stars_unique} unique targets.')
                 print(f'The unique targets are found in an average (min,max) of {round(n_stars/n_stars_unique,1)} ({unique_counts.min()},{unique_counts.max()}) images.')
@@ -1826,6 +1920,8 @@ def analyse_images(image_list,field,path,
                 
                 step_ind = -1 #for the first call
                                 
+#                ratio_means,rot_means,on_skew_means,off_skew_means
+                
                 def lnpost_previous(walker_ind) -> np.ndarray:
                     params = previous_params[walker_ind]
                     return lnpost_vector(params,
@@ -1837,6 +1933,7 @@ def analyse_images(image_list,field,path,
                                             unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                                             global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                             unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                                            ratio_means,rot_means,on_skew_means,off_skew_means,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                 
                 def lnpost_new(walker_ind) -> np.ndarray:
@@ -1850,6 +1947,7 @@ def analyse_images(image_list,field,path,
                                             unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                                             global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                             unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                                            ratio_means,rot_means,on_skew_means,off_skew_means,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                                 
                 for w_ind in range(nwalkers_sample):
@@ -2033,6 +2131,7 @@ def analyse_images(image_list,field,path,
                                     unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                                     global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                     unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+                                    ratio_means,rot_means,on_skew_means,off_skew_means,
                                     out_q)
                             p = mp.Process(target=lnpost_new_parallel,
                                            args=args)

@@ -148,6 +148,7 @@ def gaiahub_BPMs(argv):
     
     #probably want to figure out how to ask the user for a thresh_time
     thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+#    thresh_time = ((datetime.datetime(2023, 6, 23, 12, 15, 31, 308307)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
     
 #    print('image_names',image_names)
         
@@ -287,6 +288,7 @@ if __name__ == '__main__':
         path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
         overwrite_previous = True
         overwrite_GH_summaries = False
+        overwrite_GH_summaries = True
         n_fit_max = 3
         max_stars = 2000
         max_images = 10
@@ -299,6 +301,7 @@ if __name__ == '__main__':
         
         #probably want to figure out how to ask the user for a thresh_time, but for now, it is the last time I changed the main code
         thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+#        thresh_time = ((datetime.datetime(2023, 6, 23, 12, 15, 31, 308307)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
         
         image_names = 'y'
         
