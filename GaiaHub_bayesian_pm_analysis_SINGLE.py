@@ -57,7 +57,7 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # export VECLIB_MAXIMUM_THREADS=4
 os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
 #used to decide if previous analyses should automatically be overwritten because of newer version of code 
-last_update_time = (datetime.datetime(2023, 6, 23, 13, 46, 1, 165932)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+last_update_time = (datetime.datetime(2023, 6, 23, 15, 3, 54, 712752)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
 
 def gaiahub_single_BPMs(argv):  
     """
@@ -1281,8 +1281,12 @@ def analyse_images(image_list,field,path,
                     multiplicity[curr_inds] = np.sum(use_inds[curr_inds])
                 n_stars_unique = len(unique_ids)
                 n_used_stars_unique = np.sum(unique_keep)
+                
 #                if n_stars_unique == np.sum(unique_missing_prior_PM):
 #                    print(f"SKIPPING fit of image(s) {image_name} in {mask_name} because no sources have Gaia priors. The results will be the same as GaiaHub's output.")
+#                    skip_fitting = True
+#                    break
+#                else:
 #                    skip_fitting = True
 #                    break
                 
@@ -1300,7 +1304,7 @@ def analyse_images(image_list,field,path,
                 if fit_count == 0:
                     print(f'Using {n_threads} CPU(s).')
                     if n_stars_unique == np.sum(unique_missing_prior_PM):
-                        print(f"WARNING: image(s) {image_name} in {mask_name} have no sources with Gaia priors. This will likely impact results.")
+                        print(f"WARNING: image(s) {image_name} in {mask_name} have no sources with Gaia priors, which will likely impact results.")
                 print(f'Current image(s) have time baselines of {np.round((gaia_mjd-keep_im_mjds)/365,2)} years from Gaia.')
                 print(f'Current image(s) have a total of {n_stars_unique} unique targets.')
                 print(f'The unique targets are found in an average (min,max) of {round(n_stars/n_stars_unique,1)} ({unique_counts.min()},{unique_counts.max()}) images.')
@@ -1367,6 +1371,11 @@ def analyse_images(image_list,field,path,
                     mean_gaia_pm_x = np.nanmedian(gaia_pm_xs[curr_inds])
                     mean_gaia_pm_y = np.nanmedian(gaia_pm_ys[curr_inds])
                     
+                    if not np.isfinite(mean_gaia_pm_x):
+                        mean_gaia_pm_x = 0
+                    if not np.isfinite(mean_gaia_pm_y):
+                        mean_gaia_pm_y = 0
+                    
                     gaia_pms[missing_prior_PM] = np.array([mean_gaia_pm_x,mean_gaia_pm_y])
                     gaia_pm_xs[missing_prior_PM] = mean_gaia_pm_x
                     gaia_pm_ys[missing_prior_PM] = mean_gaia_pm_y
@@ -1375,6 +1384,9 @@ def analyse_images(image_list,field,path,
                     mean_gaia_parallax = np.nansum(gaia_parallaxes[curr_inds]*gaia_parallax_ivar)/np.nansum(gaia_parallax_ivar)
                     
                     mean_gaia_parallax = np.nanmedian(gaia_parallaxes[curr_inds])
+                    
+                    if not np.isfinite(mean_gaia_parallax):
+                        mean_gaia_parallax = 0.5
                     
                     global_vector_mean = np.array([0,0,mean_gaia_pm_x,mean_gaia_pm_y,mean_gaia_parallax])
                     diff = gaia_vectors[curr_inds]-global_vector_mean
@@ -1432,10 +1444,8 @@ def analyse_images(image_list,field,path,
                     diff = all_post_meds[curr_unique_inds]-global_vector_mean
                     global_vector_cov = (np.einsum('ni,nj->ij',diff,diff)/(len(diff)-1))*10**2
                 if (not np.isfinite(global_vector_cov[2,2])) or (not np.isfinite(global_vector_cov[3,3])):
-                    global_vector_cov[2:4,2:4] = np.array([[100**2,0],[0,100**2]])
+                    global_vector_cov[2:4,2:4] = np.array([[300**2,0],[0,300**2]])
                 global_vector_mean[~np.isfinite(global_vector_mean)] = 0
-                if (not np.isfinite(global_vector_cov[2,2])) or (not np.isfinite(global_vector_cov[3,3])):
-                    global_vector_cov[2:4,2:4] = np.array([[100**2,0],[0,100**2]])
                 min_pm_err = 10.0
                 cov_mult_factor = max(1.0,min_pm_err**2/global_vector_cov[2,2],min_pm_err**2/global_vector_cov[3,3])
                 global_vector_cov *= cov_mult_factor
@@ -1469,16 +1479,16 @@ def analyse_images(image_list,field,path,
                 print()
                 print()
                 
-                global_parallax_mean = 0.5
-                global_parallax_var = 10**2
+                global_parallax_mean = global_vector_mean[4]
+                global_parallax_var = global_vector_cov[4,4]
                 global_parallax_ivar = 1/global_parallax_var
                 global_pm_mean = global_vector_mean[2:4]
                 global_pm_cov = global_vector_cov[2:4,2:4]
                 global_pm_inv_cov = np.linalg.inv(global_pm_cov)
                     
                 #put a diffuse prior on the missing proper motions
-                gaia_pm_x_errs[missing_prior_PM] = 100 #mas/yr
-                gaia_pm_y_errs[missing_prior_PM] = 100 #mas/yr
+                gaia_pm_x_errs[missing_prior_PM] = 300 #mas/yr
+                gaia_pm_y_errs[missing_prior_PM] = 300 #mas/yr
                 gaia_pm_x_y_corrs[missing_prior_PM] = 0
                 
                 gaia_pm_covs = np.zeros((len(x),2,2))
@@ -1542,7 +1552,10 @@ def analyse_images(image_list,field,path,
                 #use the maximum of the prior distribution (i.e. 0 if distribution has negative mean)
         #         gaia_parallaxes = np.maximum(1e-6,gaia_parallaxes)
 #                gaia_parallax_dist_lognorms = 0#np.log(1-stats.norm(loc=gaia_prior_parallaxes,scale=gaia_parallax_errs).cdf(0))
-                
+        
+#                print(gaia_pm_xs)
+#                print(gaia_pm_ys)
+#                print(gaia_parallaxes)
                 
                 gaia_vectors[:,2] = gaia_pm_xs #PM_RA
                 gaia_vectors[:,3] = gaia_pm_ys #PM_Dec
@@ -2310,16 +2323,16 @@ def analyse_images(image_list,field,path,
                 plt.close('all')
                 # plt.show()
         
-                fig = plt.figure(figsize=[12,6])
-                #plt.plot(np.arange(len(acpt_fracs))[minKeep:],acpt_fracs[minKeep:],lw=1,alpha=1)
-                plt.plot(np.arange(len(stretch_a_vals)),stretch_a_vals,lw=1,alpha=1)
-                ax0.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True)
-                plt.xlabel('Step Number')
-                plt.ylabel('Stretch Move $a$ value')
-                plt.tight_layout()
-                plt.savefig(f'{outpath}{image_name}_MCMC_stretch_move_value_it%02d.png'%(fit_count))
-                plt.close('all')
-                # plt.show()
+#                fig = plt.figure(figsize=[12,6])
+#                #plt.plot(np.arange(len(acpt_fracs))[minKeep:],acpt_fracs[minKeep:],lw=1,alpha=1)
+#                plt.plot(np.arange(len(stretch_a_vals)),stretch_a_vals,lw=1,alpha=1)
+#                ax0.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True)
+#                plt.xlabel('Step Number')
+#                plt.ylabel('Stretch Move $a$ value')
+#                plt.tight_layout()
+#                plt.savefig(f'{outpath}{image_name}_MCMC_stretch_move_value_it%02d.png'%(fit_count))
+#                plt.close('all')
+#                # plt.show()
             
                 n_plot_walkers = min(100,nwalkers)
                 chosen_walker_inds = np.random.choice(nwalkers,size=n_plot_walkers,replace=False)
@@ -3708,8 +3721,8 @@ def analyse_images(image_list,field,path,
             plt.minorticks_on()
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
-            plt.plot(g_mag[unique_inds][plot_gaia_err_size][keep_gmag_order],
-                     (gaia_pos_err_sizes[unique_inds]/posterior_pos_err_sizes)[plot_gaia_err_size][keep_gmag_order],
+            plt.plot(g_mag[unique_inds][gmag_order],
+                     (gaia_pos_err_sizes[unique_inds]/posterior_pos_err_sizes)[gmag_order],
                      marker='.',ms=10,color='C0',label='KM',lw=2)
             plt.xlabel('G (mag)')
             plt.ylabel(r'Position Error Improvement Factor')

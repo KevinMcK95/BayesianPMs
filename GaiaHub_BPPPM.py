@@ -59,6 +59,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
 curr_scripts_dir = os.path.dirname(os.path.abspath(__file__))
 n_max_threads = BPM.n_max_threads
+last_update_time = BPM.last_update_time
 
 def gaiahub_BPMs(argv):  
     """
@@ -147,8 +148,7 @@ def gaiahub_BPMs(argv):
     individual_fit_only = args.individual_fit_only
     
     #probably want to figure out how to ask the user for a thresh_time
-    thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-#    thresh_time = ((datetime.datetime(2023, 6, 23, 12, 15, 31, 308307)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+    thresh_time = last_update_time
     
 #    print('image_names',image_names)
         
@@ -184,7 +184,7 @@ def gaiahub_BPMs(argv):
             final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
             if os.path.isfile(final_fig):
                 file_time = os.path.getmtime(final_fig)
-                if (file_time > thresh_time) or (not overwrite_previous):
+                if (file_time > thresh_time) and (not overwrite_previous):
                     print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
                     continue
             
@@ -253,6 +253,73 @@ if __name__ == '__main__':
     if not testing:
         gaiahub_BPMs(sys.argv[1:])
     else:
+        
+        field = 'COSMOS_field'
+        path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
+        overwrite_previous = True
+        overwrite_previous = False
+        overwrite_GH_summaries = False
+#        overwrite_GH_summaries = True
+        n_fit_max = 3
+        max_stars = 2000
+        max_images = 10
+        redo_without_outliers = True
+        plot_indv_star_pms = True
+        n_threads = n_max_threads
+        
+        individual_fit_only = False
+#        individual_fit_only = True
+        
+        thresh_time = last_update_time
+        
+        linked_image_list = [
+                            ['j8pu79lrq'],['j8pu79m2q'],['j8pu74mqq'],
+                            ['j8pu79lrq','j8pu79m2q'],
+                            ['j8pu79lrq','j8pu79m2q','j8pu74mqq'],
+                            ['j8pu6ohyq'],['j8pu6oi1q'],['j8pu6oi4q'],['j8pu6oi8q'],
+                            ['j8pu6ohyq','j8pu6oi1q'],
+                            ['j8pu6ohyq','j8pu6oi1q','j8pu6oi4q'],
+                            ['j8pu6ohyq','j8pu6oi1q','j8pu6oi8q'],
+                            ]
+        
+        for entry_ind,entry in enumerate(linked_image_list):
+            print(f'\n\n\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
+            
+            #check if previous analysis exists
+            image_name = '_'.join(entry)
+            outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
+                                
+            final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
+            if os.path.isfile(final_fig):
+                file_time = os.path.getmtime(final_fig)
+                if (file_time > thresh_time) and (not overwrite_previous):
+                    print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
+                    continue
+            
+            entry_list = ' '.join(entry)
+            overwrite_previous_string = ''
+            if overwrite_previous:
+                overwrite_previous_string = '--overwrite '
+            overwrite_GH_string = ''
+            if overwrite_GH_summaries:
+                overwrite_GH_string = '--overwrite_GH '
+            repeat_string = ''
+            if redo_without_outliers:
+                repeat_string = '--repeat_first_fit '
+            plot_string = ''
+            if plot_indv_star_pms:
+                plot_string = '--plot_indv_star_pms '
+                
+            #use os.system call so that each image set analysis is separate 
+            #to prevent a creep of memory leak (probably from numpy) that 
+            #uses up all the RAM and slows down the calculations significantly
+            os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
+                      f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
+                      f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}")
+        
+        
+        asdfasdfasdf
+        
         fields = [
         '47Tuc',
         'Arp2',
@@ -300,8 +367,7 @@ if __name__ == '__main__':
         individual_fit_only = True
         
         #probably want to figure out how to ask the user for a thresh_time, but for now, it is the last time I changed the main code
-        thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-#        thresh_time = ((datetime.datetime(2023, 6, 23, 12, 15, 31, 308307)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+        thresh_time = last_update_time
         
         image_names = 'y'
         
@@ -328,7 +394,7 @@ if __name__ == '__main__':
                 final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
                 if os.path.isfile(final_fig):
                     file_time = os.path.getmtime(final_fig)
-                    if (file_time > thresh_time) or (not overwrite_previous):
+                    if (file_time > thresh_time) and (not overwrite_previous):
                         print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
                         continue
                 
