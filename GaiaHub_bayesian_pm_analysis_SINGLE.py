@@ -364,6 +364,8 @@ ratio_width = 0.01
 rot_width = 1 #degrees
 on_skew_width = 0.01
 off_skew_width = 0.01
+w0_width = 10 #Pseudo-Gaia pixels
+z0_width = 10 #Pseudo-Gaia pixels
 
 def lnpost_vector(params,
                   n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
@@ -374,7 +376,7 @@ def lnpost_vector(params,
                   unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                   global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                   unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
-                  ratio_means,rot_means,on_skew_means,off_skew_means,
+                  ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
                   seed=101,n_pms=1) -> np.ndarray:
 #    print(params)
 #    np.random.seed(seed)
@@ -393,7 +395,7 @@ def lnpost_vector(params,
     # x0s = param_outputs[:,0]
     # y0s = param_outputs[:,1]
 
-    rots = np.arctan2(bgs-cgs,ags+dgs)*180/np.pi
+    rots = np.arctan2(bgs-cgs,ags+dgs)*180/np.pi #degrees
     ratios = np.sqrt(ags*dgs-bgs*cgs)
     on_skews = 0.5*(ags-dgs)
     off_skews = 0.5*(bgs+cgs)
@@ -426,8 +428,10 @@ def lnpost_vector(params,
         rot_lp = -0.5*(((rots[j]-rot_means[j])/rot_width)**2)
         on_skew_lp = -0.5*(((on_skews[j]-on_skew_means[j])/on_skew_width)**2)
         off_skew_lp = -0.5*(((off_skews[j]-off_skew_means[j])/off_skew_width)**2)
+        w0_lp = -0.5*(((w0s[j]-w0_means[j])/w0_width)**2)
+        z0_lp = -0.5*(((z0s[j]-z0_means[j])/z0_width)**2)
         transform_logpriors[j] = np.log(transform_jacobian(ags[j],bgs[j],cgs[j],dgs[j]))\
-                                 +ratio_lp+rot_lp+on_skew_lp+off_skew_lp
+                                 +ratio_lp+rot_lp+on_skew_lp+off_skew_lp+w0_lp+z0_lp
         
     matrices = poss_matrices[img_nums]
     matrices_T = poss_matrices_T[img_nums]
@@ -620,7 +624,7 @@ def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_i
                         unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                         global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                         unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
-                        ratio_means,rot_means,on_skew_means,off_skew_means,
+                        ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
                         out_q):
     output = np.zeros((len(walker_inds),len(unique_ids),5+1))
     for count,w_ind in enumerate(walker_inds):
@@ -634,7 +638,7 @@ def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_i
                                       unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                                       global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                       unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
-                                      ratio_means,rot_means,on_skew_means,off_skew_means,
+                                      ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
                                       seed=w_ind+(step_ind+1)*(nwalkers_sample+1))
     out_q.put((output,thread_ind))
     return
@@ -1009,6 +1013,8 @@ def analyse_images(image_list,field,path,
                 rot_means = np.zeros(len(param_outputs))
                 on_skew_means = np.zeros(len(param_outputs))
                 off_skew_means = np.zeros(len(param_outputs))
+                w0_means = np.zeros(len(param_outputs))
+                z0_means = np.zeros(len(param_outputs))
                 
                 for j,orig_ind in enumerate(keep_im_nums):
                     xo,yo,wo,zo,ag,bg,cg,dg,rot_sign = param_outputs[j]
@@ -1022,6 +1028,8 @@ def analyse_images(image_list,field,path,
                     rot_means[j] = rot
                     on_skew_means[j] = on_skew
                     off_skew_means[j] = off_skew
+                    w0_means[j] = wo
+                    z0_means[j] = zo
                     
                 gaia_id = np.copy(data_combined[mask_name]['Gaia_id'])
                 sort_gaia_id_inds = np.argsort(gaia_id)
@@ -1919,9 +1927,7 @@ def analyse_images(image_list,field,path,
                 previous_params = pos
                 
                 step_ind = -1 #for the first call
-                                
-#                ratio_means,rot_means,on_skew_means,off_skew_means
-                
+                                                
                 def lnpost_previous(walker_ind) -> np.ndarray:
                     params = previous_params[walker_ind]
                     return lnpost_vector(params,
@@ -1933,7 +1939,7 @@ def analyse_images(image_list,field,path,
                                             unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                                             global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                             unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
-                                            ratio_means,rot_means,on_skew_means,off_skew_means,
+                                            ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                 
                 def lnpost_new(walker_ind) -> np.ndarray:
@@ -1947,7 +1953,7 @@ def analyse_images(image_list,field,path,
                                             unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                                             global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                             unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
-                                            ratio_means,rot_means,on_skew_means,off_skew_means,
+                                            ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                                 
                 for w_ind in range(nwalkers_sample):
@@ -2131,7 +2137,7 @@ def analyse_images(image_list,field,path,
                                     unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
                                     global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                     unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
-                                    ratio_means,rot_means,on_skew_means,off_skew_means,
+                                    ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
                                     out_q)
                             p = mp.Process(target=lnpost_new_parallel,
                                            args=args)
