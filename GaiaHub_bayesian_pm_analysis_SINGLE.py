@@ -56,6 +56,9 @@ os.environ["MKL_NUM_THREADS"] = "1" # export MKL_NUM_THREADS=6
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # export VECLIB_MAXIMUM_THREADS=4
 os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
+#used to decide if previous analyses should automatically be overwritten because of newer version of code 
+last_update_time = (datetime.datetime(2023, 6, 23, 13, 46, 1, 165932)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+
 def gaiahub_single_BPMs(argv):  
     """
     Inputs
@@ -132,8 +135,7 @@ def gaiahub_single_BPMs(argv):
     fit_population_pms = args.fit_population_pms
     
     #probably want to figure out how to ask the user for a thresh_time
-    thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-#    thresh_time = ((datetime.datetime(2023, 6, 23, 12, 15, 31, 308307)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+    thresh_time = last_update_time
     
 #    print('image_names',image_names)
         
@@ -1140,7 +1142,7 @@ def analyse_images(image_list,field,path,
 #                final_fig = f'{outpath}{image_name}_posterior_population_PM_offset_analysis_pop_dist.png'
                 if os.path.isfile(final_fig):
                     file_time = os.path.getmtime(final_fig)
-                    if (file_time > thresh_time) or (not overwrite_previous):
+                    if (file_time > thresh_time) and (not overwrite_previous):
                         print(f'SKIPPING fit of image {image_name} in {mask_name} because it has recently been analysed.')
                         skip_fitting = True
                         break
@@ -3101,7 +3103,7 @@ def analyse_images(image_list,field,path,
             if skip_fitting:
                 continue
             
-            final_fit_count = fit_count-1
+            final_fit_count = fit_count
             
             print()
             total_fit_end = time.time()
@@ -4657,9 +4659,7 @@ if __name__ == '__main__':
 #    #    field = 'Fornax_dSph'
 #        field = 'COSMOS_field'
 #    
-#        thresh_time = ((datetime.datetime(2023,5,22,15,20,38,259741)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
-#        if field in ['COSMOS_field']:
-#            thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
+#        thresh_time = last_update_time
 #    
 #    #    analyse_images(['j8pu0bswq'],
 #    #                   field,path,
