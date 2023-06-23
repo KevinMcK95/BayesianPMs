@@ -6,6 +6,20 @@ Created on Thu Jun 22 09:55:11 2023
 @author: kevinm
 """
 
+
+
+'''
+TODO:
+    -make a summary file of results
+        -each time an analysis is finished, loop over each of the stars 
+        -make a new results file for that star if is doesn't exist summarizing the star's measures
+        -for stars that have previous analyses (above the threshold time), compare the posterior PM distribution widths
+        -save the results that have the smallest posterior PM uncertainties
+        -make a global function that collects the results from all the stars and puts them in a big final csv
+
+'''     
+
+
 import os
 import math
 import gc
@@ -60,6 +74,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 curr_scripts_dir = os.path.dirname(os.path.abspath(__file__))
 n_max_threads = BPM.n_max_threads
 last_update_time = BPM.last_update_time
+final_file_ext = BPM.final_file_ext
 
 def gaiahub_BPMs(argv):  
     """
@@ -181,9 +196,9 @@ def gaiahub_BPMs(argv):
             image_name = '_'.join(entry)
             outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
                                 
-            final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
-            if os.path.isfile(final_fig):
-                file_time = os.path.getmtime(final_fig)
+            final_file = f'{outpath}{image_name}{final_file_ext}'
+            if os.path.isfile(final_file):
+                file_time = os.path.getmtime(final_file)
                 if (file_time > thresh_time) and (not overwrite_previous):
                     print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
                     continue
@@ -248,7 +263,7 @@ def gaiahub_BPMs(argv):
 if __name__ == '__main__':
     
     testing = False
-#    testing = True
+    testing = True
     
     if not testing:
         gaiahub_BPMs(sys.argv[1:])
@@ -281,6 +296,9 @@ if __name__ == '__main__':
                             ['j8pu6ohyq','j8pu6oi1q','j8pu6oi4q'],
                             ['j8pu6ohyq','j8pu6oi1q','j8pu6oi8q'],
                             ]
+        linked_image_list = [
+                            ['j8pu6ohyq']
+                            ]
         
         for entry_ind,entry in enumerate(linked_image_list):
             print(f'\n\n\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
@@ -289,9 +307,9 @@ if __name__ == '__main__':
             image_name = '_'.join(entry)
             outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
                                 
-            final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
-            if os.path.isfile(final_fig):
-                file_time = os.path.getmtime(final_fig)
+            final_file = f'{outpath}{image_name}{final_file_ext}'
+            if os.path.isfile(final_file):
+                file_time = os.path.getmtime(final_file)
                 if (file_time > thresh_time) and (not overwrite_previous):
                     print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
                     continue
@@ -391,9 +409,9 @@ if __name__ == '__main__':
                 image_name = '_'.join(entry)
                 outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
                                     
-                final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
-                if os.path.isfile(final_fig):
-                    file_time = os.path.getmtime(final_fig)
+                final_file = f'{outpath}{image_name}{final_file_ext}'
+                if os.path.isfile(final_file):
+                    file_time = os.path.getmtime(final_file)
                     if (file_time > thresh_time) and (not overwrite_previous):
                         print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
                         continue
@@ -418,6 +436,7 @@ if __name__ == '__main__':
                 os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
                           f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
                           f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}")
-            
+   
+    
 
 

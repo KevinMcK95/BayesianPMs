@@ -57,7 +57,8 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # export VECLIB_MAXIMUM_THREADS=4
 os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
 #used to decide if previous analyses should automatically be overwritten because of newer version of code 
-last_update_time = (datetime.datetime(2023, 6, 23, 15, 3, 54, 712752)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+last_update_time = (datetime.datetime(2023, 6, 23, 15, 43, 58, 385797)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+final_file_ext = '_fit_summary.csv'
 
 def gaiahub_single_BPMs(argv):  
     """
@@ -1134,14 +1135,11 @@ def analyse_images(image_list,field,path,
                 if not os.path.isdir(outpath):
                     os.makedirs(outpath)
                                     
-#                star_name = unique_ids[-1]
-#                indv_star_path = f'{path}{field}/Bayesian_PMs/{image_name}/indv_stars/'
-#                final_fig = f'{indv_star_path}{image_name}_{star_name}_posterior_PM_comparison.png'
-                final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
+                final_file = f'{outpath}{image_name}{final_file_ext}'
 #                print(final_fig)
 #                final_fig = f'{outpath}{image_name}_posterior_population_PM_offset_analysis_pop_dist.png'
-                if os.path.isfile(final_fig):
-                    file_time = os.path.getmtime(final_fig)
+                if os.path.isfile(final_file):
+                    file_time = os.path.getmtime(final_file)
                     if (file_time > thresh_time) and (not overwrite_previous):
                         print(f'SKIPPING fit of image {image_name} in {mask_name} because it has recently been analysed.')
                         skip_fitting = True
@@ -4420,6 +4418,152 @@ def analyse_images(image_list,field,path,
             # plt.show()
                         
     if not skip_fitting:
+        
+        #make output summary file for the current set of images
+        
+        labels = ['Gaia_ID','G_mag']
+        values = ['RA','Dec','parallax','PMRA','PMDec']
+        
+        for prepend in ['','BPPPM_']:
+            for i in range(len(values)):
+                labels.append(prepend+values[i])
+            for i in range(len(values)):
+                labels.append(prepend+values[i]+'_err')
+            for i in range(len(values)):
+                for j in range(i+1,len(values)):
+                    labels.append(prepend+values[i]+'_'+values[j]+'_corr')
+        
+        labels.extend(['used_in_trans_fit','n_hst_images','hst_images'])
+        
+        image = image_name
+        
+        post_pm_parallax_offset_meds = np.load(f'{outpath}{image}_posterior_PM_parallax_offset_medians.npy')
+        post_pm_parallax_offset_covs = np.load(f'{outpath}{image}_posterior_PM_parallax_offset_covs.npy')
+        unique_ids = np.load(f'{outpath}{image}_posterior_Gaia_ids.npy')
+        
+        gaia_ids = np.load(f'{outpath}{image}_Gaia_IDs.npy')            
+        gaia_ra_dec_gmags = np.load(f'{outpath}{image}_Gaia_RAs_Decs_Gmags.npy')
+        keep_stars = np.load(f'{outpath}{image}_used_stars.npy',)
+        
+        _,unique_inds,unique_inv_inds,unique_counts = np.unique(gaia_ids,return_index=True,
+                                                                return_inverse=True,return_counts=True)
+    
+        n_stars = len(unique_ids)
+        keep_star_inds = np.where(keep_stars)[0]
+        keep_ids = gaia_ids[keep_star_inds]
+        unique_keep = np.zeros(len(unique_ids)).astype(bool)
+        use_inds = np.zeros(len(keep_stars)).astype(bool) 
+        unique_star_mapping = {}
+        multiplicity = np.ones(len(gaia_ids)) #keep track of the count so that the priors are applied properly
+        for star_ind,star_name in enumerate(unique_ids):
+            curr_inds = np.where(gaia_ids == star_name)[0]
+            if star_name not in keep_ids:
+                #then use all the images to measure PMs, but don't use for transform fitting
+                unique_keep[star_ind] = False
+            else:
+                # curr_inds = keep_star_inds[np.where(keep_ids == star_name)[0]]
+                unique_keep[star_ind] = True
+            if np.sum(keep_stars[curr_inds]) == 0:
+                #then use all the images to measure PMs, but don't use for transform fitting
+                use_inds[curr_inds] = True
+            else:
+                curr_inds = curr_inds[keep_stars[curr_inds]]
+                use_inds[curr_inds] = keep_stars[curr_inds]
+            unique_star_mapping[star_name] = curr_inds
+            multiplicity[curr_inds] = np.sum(use_inds[curr_inds])
+            
+        indv_image_names = image.split('_')
+        hst_image_names = ' '.join(indv_image_names)
+        indv_image_names = np.array(indv_image_names)
+        
+    #    star_hst_images = {}
+        star_n_hst_images = np.zeros(len(unique_ids)).astype(int)
+        for star_ind,star_name in enumerate(unique_ids):
+            curr_inds = unique_star_mapping[star_name]
+    #        star_hst_images[star_name] = indv_image_names[curr_inds]
+            star_n_hst_images[star_ind] = np.sum(use_inds[curr_inds])
+        
+        
+        n_params_per_star = len(post_pm_parallax_offset_meds)//n_stars
+        indv_posterior_covs = np.zeros((n_stars,n_params_per_star,n_params_per_star))
+        indv_posterior_meds = np.zeros((n_stars,n_params_per_star))
+        for star_ind,star_name in enumerate(unique_ids):
+            #order goes [PMRA,PMDEC,parallax,DeltaRA,DeltaDec]
+            curr_bounds = star_ind*n_params_per_star,(star_ind+1)*n_params_per_star
+            indv_posterior_meds[star_ind] = post_pm_parallax_offset_meds[curr_bounds[0]:curr_bounds[1]]
+            indv_posterior_covs[star_ind] = post_pm_parallax_offset_covs[curr_bounds[0]:curr_bounds[1],curr_bounds[0]:curr_bounds[1]]
+        
+        #means/medians
+        pmras = indv_posterior_meds[:,0]
+        pmdecs = indv_posterior_meds[:,1]
+        parallaxes = indv_posterior_meds[:,2]
+        deltaras = indv_posterior_meds[:,3]
+        deltadecs = indv_posterior_meds[:,4]
+        
+        #individual errors
+        pmra_errs = np.sqrt(indv_posterior_covs[:,0,0])
+        pmdec_errs = np.sqrt(indv_posterior_covs[:,1,1])
+        parallax_errs = np.sqrt(indv_posterior_covs[:,2,2])
+        deltara_errs = np.sqrt(indv_posterior_covs[:,3,3])
+        deltadec_errs = np.sqrt(indv_posterior_covs[:,4,4])
+    
+        #correlation with deltaRA
+        deltara_deltadec_corrs = indv_posterior_covs[:,3,4]/(deltara_errs*deltadec_errs)
+        deltara_parallax_corrs = indv_posterior_covs[:,3,2]/(deltara_errs*parallax_errs)
+        deltara_pmra_corrs = indv_posterior_covs[:,3,0]/(deltara_errs*pmra_errs)
+        deltara_pmdec_corrs = indv_posterior_covs[:,3,1]/(deltara_errs*pmdec_errs)
+        
+        #correlation with deltaDec
+        deltadec_parallax_corrs = indv_posterior_covs[:,4,2]/(deltadec_errs*parallax_errs)
+        deltadec_pmra_corrs = indv_posterior_covs[:,4,0]/(deltadec_errs*pmra_errs)
+        deltadec_pmdec_corrs = indv_posterior_covs[:,4,1]/(deltadec_errs*pmdec_errs)
+    
+        #correlation with parallax
+        parallax_pmra_corrs = indv_posterior_covs[:,2,0]/(parallax_errs*pmra_errs)
+        parallax_pmdec_corrs = indv_posterior_covs[:,2,1]/(parallax_errs*pmdec_errs)
+        
+        #correlation with PMRA
+        pmra_pmdec_corrs = indv_posterior_covs[:,0,1]/(pmra_errs*pmdec_errs)
+        
+        output_dict = {}
+        output_dict['Gaia_ID'] = unique_ids
+        output_dict['G_mag'] = gaia_ra_dec_gmags[unique_inds,2]
+        output_dict['RA'] = gaia_ra_dec_gmags[unique_inds,0]
+        output_dict['Dec'] = gaia_ra_dec_gmags[unique_inds,1]
+        
+        output_dict['BPPPM_DeltaRA'] = deltaras
+        output_dict['BPPPM_DeltaDec'] = deltadecs
+        output_dict['BPPPM_parallax'] = parallaxes
+        output_dict['BPPPM_PMRA'] = pmras
+        output_dict['BPPPM_PMDec'] = pmdecs
+    
+        output_dict['BPPPM_DeltaRA_err'] = deltara_errs
+        output_dict['BPPPM_DeltaDec_err'] = deltadec_errs
+        output_dict['BPPPM_parallax_err'] = parallax_errs
+        output_dict['BPPPM_PMRA_err'] = pmra_errs
+        output_dict['BPPPM_PMDec_err'] = pmdec_errs
+        
+        output_dict['BPPPM_DeltaRA_DeltaDec_corr'] = deltara_deltadec_corrs
+        output_dict['BPPPM_DeltaRA_parallax_corr'] = deltara_parallax_corrs
+        output_dict['BPPPM_DeltaRA_PMRA_corr'] = deltara_pmra_corrs
+        output_dict['BPPPM_DeltaRA_PMDec_corr'] = deltara_pmdec_corrs
+    
+        output_dict['BPPPM_DeltaDec_parallax_corr'] = deltadec_parallax_corrs
+        output_dict['BPPPM_DeltaDec_PMRA_corr'] = deltadec_pmra_corrs
+        output_dict['BPPPM_DeltaDec_PMDec_corr'] = deltadec_pmdec_corrs
+    
+        output_dict['BPPPM_parallax_PMRA_corr'] = parallax_pmra_corrs
+        output_dict['BPPPM_parallax_PMDec_corr'] = parallax_pmdec_corrs
+    
+        output_dict['BPPPM_PMRA_PMDec_corr'] = pmra_pmdec_corrs
+        
+        output_dict['used_in_trans_fit'] = unique_keep
+        output_dict['n_hst_images'] = star_n_hst_images
+        output_dict['hst_images'] = [hst_image_names]*len(unique_ids)
+    
+        output_df = pd.DataFrame(output_dict)
+        output_df.to_csv(f'{outpath}{image}_fit_summary.csv',index=False)
+        
         del samplerChain
         del samples
         del lnposts
