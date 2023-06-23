@@ -271,6 +271,8 @@ def collect_gaiahub_results(field,
     
     print(f'Reading in data for {len(hst_image_paths)} images in field {field}.')
         
+    stars_found_in_images = {}
+    
     good_count = 0
     for _,trans_file in enumerate(tqdm(hst_image_paths,total=len(hst_image_paths))):
         mask_name = field
@@ -286,6 +288,7 @@ def collect_gaiahub_results(field,
                                                'on_axis_skew':[],'off_axis_skew':[],'rotate_mult_fact':[],
                                                'orig_rot':[],'orig_pixel_scale':[],'obsid':[],'exptime':[],
                                                'HST_time':[]}
+            
 #            trans_file_summaries[mask_name] = {}
     
             #X in Gaia pixels of cross matched star
@@ -476,6 +479,12 @@ def collect_gaiahub_results(field,
         if image_name not in hst_image_obsids:
             print(f'SKIPPING: Could not find image {image_name} in GaiaHub output files.')
             continue
+        
+        #change the q_fit for stars that are saturated to be REALLY big
+        #so that their position uncertainties are huge, and then we can 
+        #use their values for fitting
+        q_hst[~use_for_fit] = 10/0.8 #make the position uncertainty 10 HST pixels
+        use_for_fit[:] = True
                 
         gaiahub_output_info[mask_name]['X_G'].append(X_G)
         gaiahub_output_info[mask_name]['Y_G'].append(Y_G)
@@ -529,6 +538,10 @@ def collect_gaiahub_results(field,
             gaiahub_output_info[mask_name][label].append(gaia_measures[label][source_id_inds])
                             
         star_names = gaia_measures['source_id'][source_id_inds]
+        for star_name in star_names:
+            if star_name not in stars_found_in_images:
+                stars_found_in_images[star_name] = []
+            stars_found_in_images[star_name].append(image_name)
             
         gaiahub_output_info[mask_name]['Gaia_id'].append(star_names)
         gaiahub_output_info[mask_name]['x_hst_err'].append(gaia_measures['xc_hst_mean_error'][source_id_inds])  
@@ -611,10 +624,7 @@ def collect_gaiahub_results(field,
             
         good_count += 1
         
-    print(f'\nFound {good_count} useful images in field {field}.')
-    
-    print(f'Summarizing GaiaHub output files for {good_count} useful images in field {field}.')
-    
+    #change everything to arrays
     for mask in trans_file_summaries:
         for param in gaiahub_output_info[mask]:
             for image_ind in range(len(gaiahub_output_info[mask]['Gaia_id'])):
@@ -622,7 +632,24 @@ def collect_gaiahub_results(field,
             gaiahub_output_info[mask][param] = np.array(gaiahub_output_info[mask][param])
         for param in trans_file_summaries[mask]:
             trans_file_summaries[mask][param] = np.array(trans_file_summaries[mask][param])
-                    
+            
+    #use the stars_found_in_images dictionary to update the HST image lists for each star because
+    #GaiaHub isn't always correct
+    for _,trans_file in enumerate(hst_image_paths):
+        mask_name = field
+        image_name = trans_file.split('/')[-2]
+        if image_name not in trans_file_summaries[mask_name]['image_name']:
+            continue
+        image_ind = np.where(trans_file_summaries[mask_name]['image_name'] == image_name)[0][0]
+        for star_ind,star_name in enumerate(gaiahub_output_info[mask_name]['Gaia_id'][image_ind]):
+            new_image_list = ' '.join(stars_found_in_images[star_name])
+            gaiahub_output_info[mask_name]['hst_images'][image_ind][star_ind] = new_image_list        
+            
+    print(f'\nFound {good_count} useful images in field {field}.')
+    
+    print(f'Summarizing GaiaHub output files for {good_count} useful images in field {field}.')
+    
+    for mask in trans_file_summaries:                    
         for image_ind,image_name in enumerate(trans_file_summaries[mask]['image_name']):
             curr_dict = {}
             keys = gaiahub_output_info[mask].keys()
@@ -633,7 +660,6 @@ def collect_gaiahub_results(field,
 
         trans_file_df = pd.DataFrame.from_dict(trans_file_summaries[mask])
         trans_file_df.to_csv(f'{outpath}gaiahub_image_transformation_summaries.csv',index=False)
-        
             
 #    for star_name in star_hst_pix_offsets:
 #        for param in star_hst_pix_offsets[star_name]:
@@ -647,6 +673,8 @@ def image_lister(field,path):
     '''
     For all useful HST images in field along path, determine which other images share sources, and save the list of common images.
     '''    
+    
+    #need to check the cases where 
     
     outpath = f'{path}{field}/Bayesian_PMs/'
     
