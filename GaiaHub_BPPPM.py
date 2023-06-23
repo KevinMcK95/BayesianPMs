@@ -263,7 +263,7 @@ def gaiahub_BPMs(argv):
 if __name__ == '__main__':
     
     testing = False
-    testing = True
+#    testing = True
     
     if not testing:
         gaiahub_BPMs(sys.argv[1:])
