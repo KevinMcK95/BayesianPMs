@@ -5,6 +5,7 @@
 
 
 import os
+import shutil
 import math
 import gc
 gc.enable()
@@ -91,6 +92,10 @@ def gaiahub_single_BPMs(argv):
                         action='store_true', 
                         default=True,
                         help = 'Plot the PM measurments for individual stars. Good for diagnostics.')
+    parser.add_argument('--fit_population_pms', 
+                        action='store_true', 
+                        default=False,
+                        help = 'Fit a 2D Gaussian population distribution to the posterior PM measurements. Default False.')
     parser.add_argument('--image_list', type=str, 
                         nargs='+', 
                         default = [None], 
@@ -124,14 +129,14 @@ def gaiahub_single_BPMs(argv):
     redo_without_outliers = args.repeat_first_fit
     plot_indv_star_pms = args.plot_indv_star_pms
     n_threads = args.n_processes
+    fit_population_pms = args.fit_population_pms
     
     #probably want to figure out how to ask the user for a thresh_time
     thresh_time = ((datetime.datetime(2023, 6, 16, 15, 47, 19, 264136)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600)
     
 #    print('image_names',image_names)
         
-    print()
-        
+#    fit_population_pms = False
     analyse_images(image_list,
                    field,path,
                    overwrite_previous=overwrite_previous,
@@ -142,7 +147,8 @@ def gaiahub_single_BPMs(argv):
                    redo_without_outliers=redo_without_outliers,
                    max_stars=max_stars,
                    plot_indv_star_pms=plot_indv_star_pms,
-                   n_threads=n_threads)
+                   n_threads=n_threads,
+                   fit_population_pms=fit_population_pms)
 
     return 
 
@@ -205,7 +211,6 @@ def link_images(field,path,
         new_order = np.argsort(full_linked_image_mjds[image_name])
         full_linked_image_mjds[image_name] = list(np.array(full_linked_image_mjds[image_name])[new_order])
         full_linked_images[image_name] = list(np.array(full_linked_images[image_name])[new_order])
-        
                 
     linked_image_list = []
     for image_ind,image_name in enumerate(image_names):
@@ -230,8 +235,9 @@ def link_images(field,path,
                 linked_image_list.append(full_linked_images[image_name])
     #also loop over the individual image links, adding them if not included
     for image_ind,image_name in enumerate(image_names):
-        if linked_image_info[image_name]['image_name'] not in linked_image_list:
-            linked_image_list.insert(0,linked_image_info[image_name]['image_name'])
+        poss_list = linked_image_info[image_name]['image_name'].to_list()
+        if poss_list not in linked_image_list:
+            linked_image_list.insert(0,poss_list)
                 
     print(f'Found {len(linked_image_list)} sets of linked HST images.')
                 
@@ -243,6 +249,70 @@ def link_images(field,path,
     
     return linked_image_list
 
+def lnpost_pop_pms(theta,
+                   curr_covs,curr_vals,curr_inv_covs,curr_inv_cov_dot_vals,seed=101):
+    np.random.seed(seed)
+    result = np.zeros((2+1))
+    
+    sigma_x,sigma_y,rho = theta
+    if (sigma_x <= 0) or (sigma_y <= 0) or (np.abs(rho) > 1):
+        result[:] = -np.inf
+        return result
+
+    cov_entries = sigma_x**2,rho*sigma_x*sigma_y,sigma_y**2
+    curr_pop_cov = np.array([[cov_entries[0],cov_entries[1]],[cov_entries[1],cov_entries[2]]])
+#            curr_pop_inv_cov = np.linalg.inv(curr_pop_cov)
+    curr_pop_cov_det = np.linalg.det(curr_pop_cov)
+
+    summed_covs = curr_pop_cov+curr_covs
+    summed_cov_dets = np.linalg.det(summed_covs)
+    summed_covs_inv = np.linalg.inv(summed_covs)
+    S = np.linalg.inv(np.sum(summed_covs_inv,axis=0))
+    m = np.dot(S,np.sum(np.sum(summed_covs_inv*curr_vals,axis=1),axis=0))
+#    print(curr_vals.shape,curr_covs.shape,m.shape,S.shape,theta.shape)
+    
+    #y_vects - mean_vect
+    curr_diff_from_mean = np.copy(curr_vals)
+    curr_diff_from_mean[:,0] -= m[0]
+    curr_diff_from_mean[:,1] -= m[1]
+
+    exponent_term = -0.5*np.sum(np.sum(summed_covs_inv*curr_diff_from_mean,axis=1)*curr_diff_from_mean[:,:,0],axis=1)
+
+    curr_pop_cov_lnprob = 0.5*np.log(curr_pop_cov_det)+np.sum(-0.5*np.log(summed_cov_dets)+exponent_term)
+    if not np.isfinite(curr_pop_cov_lnprob):
+        result[:] = -np.inf
+        return result
+    
+    mu_sample = stats.multivariate_normal(m,S,allow_singular=True).rvs()
+#    curr_pop_inv_cov = np.linalg.inv(curr_pop_cov)
+#    S_i_vals = np.linalg.inv(curr_pop_inv_cov+curr_inv_covs)
+#    m_i_temp_vals = curr_inv_cov_dot_vals+np.dot(curr_pop_inv_cov,mu_sample)
+#    m_i_vals = np.sum(S_i_vals*m_i_temp_vals.reshape((*m_i_temp_vals.shape,1)),axis=1)
+#    theta_samples = np.zeros((len(curr_vals),len(m)))
+#    data_samples = np.zeros_like(theta_samples)
+#    for j in range(len(theta_samples)):
+#        theta_samples[j] = stats.multivariate_normal(m_i_vals[j],S_i_vals[j],allow_singular=True).rvs()
+#        data_samples[j] = stats.multivariate_normal(theta_samples[j],curr_covs[j],allow_singular=True).rvs()
+
+        
+    #give back an example sample of parallaxes and corresponding PMs
+    result[0] = curr_pop_cov_lnprob
+#                result[:,1:] = vector_draws[0]
+    result[1:3] = mu_sample
+    
+    return result
+
+def lnpost_pop_pms_parallel(walker_inds,nwalkers,thread_ind,new_params,step_ind,
+                            curr_covs,curr_vals,curr_inv_covs,curr_inv_cov_dot_vals,
+                            out_q):
+    output = np.zeros((len(walker_inds),2+1))
+    for count,w_ind in enumerate(walker_inds):
+        params = new_params[w_ind]
+        output[count] = lnpost_pop_pms(params,
+                                       curr_covs,curr_vals,curr_inv_covs,curr_inv_cov_dot_vals,
+                                       seed=w_ind+(step_ind+1)*(nwalkers+1))
+    out_q.put((output,thread_ind))
+    return
 
 def lnpost_vector(params,
                   n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
@@ -966,6 +1036,7 @@ def analyse_images(image_list,field,path,
 #                indv_star_path = f'{path}{field}/Bayesian_PMs/{image_name}/indv_stars/'
 #                final_fig = f'{indv_star_path}{image_name}_{star_name}_posterior_PM_comparison.png'
                 final_fig = f'{outpath}{image_name}_posterior_position_uncertainty.png'
+#                print(final_fig)
 #                final_fig = f'{outpath}{image_name}_posterior_population_PM_offset_analysis_pop_dist.png'
                 if os.path.isfile(final_fig):
                     file_time = os.path.getmtime(final_fig)
@@ -2925,6 +2996,8 @@ def analyse_images(image_list,field,path,
             if skip_fitting:
                 continue
             
+            final_fit_count = fit_count-1
+            
             print()
             total_fit_end = time.time()
             print(f'Done fitting. Total process took {round(total_fit_end-total_fit_start,2)} seconds.')
@@ -3551,12 +3624,18 @@ def analyse_images(image_list,field,path,
             if not os.path.isdir(indv_star_path):
                 os.makedirs(indv_star_path)
                 
+#            plt.savefig(f'{indv_star_path}{image_name}_{star_name}_posterior_PM_comparison_it%02d.png'%(fit_count),bbox_inches='tight')
+
             print(f'Plotting comparison of data and prior PMs for each star.')
             for star_ind,_ in enumerate(tqdm(pm_x_samps[0],total=len(pm_x_samps[0]))):
 #            for star_ind in range(len(pm_x_samps[0])):
                 
                 star_name = unique_ids[star_ind]
                 curr_inds = unique_star_mapping[star_name]
+                src = f'{indv_star_path}{image_name}_{star_name}_posterior_PM_comparison_it%02d.png'%(final_fit_count)
+                dst = f'{indv_star_path}{image_name}_{star_name}_posterior_PM_comparison.png'
+                shutil.copyfile(src,dst)
+                continue
                 
                 plt.figure(figsize=(6,6))
                 ax = plt.gca()
@@ -3814,345 +3893,412 @@ def analyse_images(image_list,field,path,
             #the parallax is (e.g. a factor of 10 too large in parallax doesn't mean much when delta_RA = 0.0001 mas)
             #maybe show this as a function of time instead of gmag
             
-        if fit_population_pms:
-                if field not in ['COSMOS_field']:
-        #            n_sigma_plot = 1
-        #            too_far_x = (gaiahub_pms[unique_inds,0] <= gaiahub_pm_summary[0,0]-n_sigma_plot*gaiahub_pm_summary[0,1]) |\
-        #                        (gaiahub_pms[unique_inds,0] >= gaiahub_pm_summary[0,0]+n_sigma_plot*gaiahub_pm_summary[0,2])
-        #            too_far_y = (gaiahub_pms[unique_inds,1] <= gaiahub_pm_summary[1,0]-n_sigma_plot*gaiahub_pm_summary[1,1]) |\
-        #                        (gaiahub_pms[unique_inds,1] >= gaiahub_pm_summary[1,0]+n_sigma_plot*gaiahub_pm_summary[1,2])
-                                
-                    n_sigma_plot = 1
-                    too_far_x = (posterior_pm_meds[:,0] <= posterior_pm_summary[0,0]-n_sigma_plot*posterior_pm_summary[0,1]) |\
-                                (posterior_pm_meds[:,0] >= posterior_pm_summary[0,0]+n_sigma_plot*posterior_pm_summary[0,2])
-                    too_far_y = (posterior_pm_meds[:,1] <= posterior_pm_summary[1,0]-n_sigma_plot*posterior_pm_summary[1,1]) |\
-                                (posterior_pm_meds[:,1] >= posterior_pm_summary[1,0]+n_sigma_plot*posterior_pm_summary[1,2])
-                else:
-        #            n_sigma_plot = 3
-        #            too_far_x = (gaia_pms[unique_inds,0] <= gaia_pm_summary[0,0]-n_sigma_plot*gaia_pm_summary[0,1]) |\
-        #                        (gaia_pms[unique_inds,0] >= gaia_pm_summary[0,0]+n_sigma_plot*gaia_pm_summary[0,2])
-        #            too_far_y = (gaia_pms[unique_inds,1] <= gaia_pm_summary[1,0]-n_sigma_plot*gaia_pm_summary[1,1]) |\
-        #                        (gaia_pms[unique_inds,1] >= gaia_pm_summary[1,0]+n_sigma_plot*gaia_pm_summary[1,2])
-                    
-#                    n_sigma_plot = 3
-#                    too_far_x = (posterior_pm_meds[:,0] <= posterior_pm_summary[0,0]-n_sigma_plot*posterior_pm_summary[0,1]) |\
-#                                (posterior_pm_meds[:,0] >= posterior_pm_summary[0,0]+n_sigma_plot*posterior_pm_summary[0,2])
-#                    too_far_y = (posterior_pm_meds[:,1] <= posterior_pm_summary[1,0]-n_sigma_plot*posterior_pm_summary[1,1]) |\
-#                                (posterior_pm_meds[:,1] >= posterior_pm_summary[1,0]+n_sigma_plot*posterior_pm_summary[1,2])
-                    too_far_x = np.zeros_like(too_far_x).astype(bool)
-                    too_far_y = np.zeros_like(too_far_y).astype(bool)
-                    
-                keep_plot = ~too_far_x & ~too_far_y
-                
-                #do full 2D covariance fitting of the proper motion offsets to see if we get 
-                #a mean of (0,0), a small covariance, and minimal correlation
-                
-                #2d versions of the fitting
-                #population cov = [[sigma_feh^2,rho*sigm_feh*sigma_alpha],[rho*sigm_feh*sigma_alpha,sigma_alpha^2]]
-                #use MH-MCMC to find the sigma_feh, sigma_alpha, and rho parameters
-                
-                err_scale = 1.0 #no scaling
-                # err_scale = np.sqrt(chi2_scale) #use the result of the 2D distance fitting
-                
-                curr_err_vects = np.copy(err_vectors[keep_plot])*err_scale
-                n_params = 2
-                curr_vals = np.copy(posterior_pm_meds[keep_plot])
-                curr_vals = curr_vals.reshape((*curr_vals.shape,1))
-                curr_covs = np.copy(posterior_pm_covs[keep_plot])*err_scale**2
-                
-                plt.figure(figsize=(7,7))
-                plt.grid(visible=True, which='major', color='#666666', linestyle='-',alpha=0.3)
-                plt.minorticks_on()
-                plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
-                plt.scatter(curr_vals[:,0,0],curr_vals[:,1,0],
-                            marker='o',alpha=0.7,s=50)
-                for j in range(len(curr_vals)):
-                    for err_ind in range(n_params):
-                        curr_vect = curr_err_vects[j,err_ind]
-                        x_vals = [curr_vals[j,0,0]-curr_vect[0],curr_vals[j,0,0]+curr_vect[0]]
-                        y_vals = [curr_vals[j,1,0]-curr_vect[1],curr_vals[j,1,0]+curr_vect[1]]
-                        plt.plot(x_vals,y_vals,c='C0',lw=2,alpha=0.2,zorder=-1e10)
-                plt.axvline(0,c='C1',ls='-',zorder=-1e10)
-                plt.axhline(0,c='C1',ls='-',zorder=-1e10)
-                plt.xlabel(r'$\mu_{\mathrm{RA}}$ (mas/yr)')
-                plt.ylabel(r'$\mu_{\mathrm{Dec}}$ (mas/yr)')
-                ax = plt.gca()
-                ax.set_aspect('equal')
-                plt.tight_layout()
-                plt.close('all')
-                # plt.show()
-                
-                curr_inv_covs = np.linalg.inv(curr_covs)
-                curr_inv_cov_dot_vals = np.sum(curr_inv_covs*curr_vals,axis=1)
-                
-                #initial sigma_feh and sigma_alpha are based on total population indvidual dimension fits
-                if field not in ['COSMOS_field']:
-                    initial_sigma_x = 0.05
-                    initial_sigma_y = 0.05
-                else:
-                    initial_sigma_x = 1
-                    initial_sigma_y = 1
-                initial_rho = 0
-                
-                nfit = 100*3,600,3
-                new_pos0 = np.zeros((nfit[0],nfit[2]))
-                
-                new_pos0[:,0] = initial_sigma_x+np.random.randn(nfit[0])*initial_sigma_x/10
-                new_pos0[:,1] = initial_sigma_y+np.random.randn(nfit[0])*initial_sigma_y/10
-                new_pos0[:,2] = initial_rho+np.random.randn(nfit[0])*0.05
-                
-                def lnpost_residuals(theta):
-                    sigma_feh,sigma_alpha,rho = theta
-                    if (sigma_feh <= 0) or (sigma_alpha <= 0) or (np.abs(rho) > 1):
-                        return -np.inf
-                
-                    cov_entries = sigma_feh**2,rho*sigma_feh*sigma_alpha,sigma_alpha**2
-                    curr_pop_cov = np.array([[cov_entries[0],cov_entries[1]],[cov_entries[1],cov_entries[2]]])
-        #            curr_pop_inv_cov = np.linalg.inv(curr_pop_cov)
-                    curr_pop_cov_det = np.linalg.det(curr_pop_cov)
-                
-                    summed_covs = curr_pop_cov+curr_covs
-                    summed_cov_dets = np.linalg.det(summed_covs)
-                    summed_covs_inv = np.linalg.inv(summed_covs)
-                    S = np.linalg.inv(np.sum(summed_covs_inv,axis=0))
-                    m = np.dot(S,np.sum(np.sum(summed_covs_inv*curr_vals,axis=1),axis=0))
-                
-                    #y_vects - mean_vect
-                    curr_diff_from_mean = np.copy(curr_vals)
-                    curr_diff_from_mean[:,0] -= m[0]
-                    curr_diff_from_mean[:,1] -= m[1]
-                
-                    exponent_term = -0.5*np.sum(np.sum(summed_covs_inv*curr_diff_from_mean,axis=1)*curr_diff_from_mean[:,:,0],axis=1)
-                
-                    curr_pop_cov_lnprob = 0.5*np.log(curr_pop_cov_det)+np.sum(-0.5*np.log(summed_cov_dets)+exponent_term)
-                    if not np.isfinite(curr_pop_cov_lnprob):
-                        return -np.inf
-                    return curr_pop_cov_lnprob
-                
-                new_dim_labels = [r'$\sigma_{\mu_{\mathrm{RA}}}$',r'$\sigma_{\mu_{\mathrm{Dec}}}$',r'$\rho$']
-                
-                print('Fitting the residual proper motions:')
-                with Pool(n_threads) as pool:
-                    new_sampler = emcee.EnsembleSampler(nfit[0],nfit[2],lnpost_residuals,pool=pool)
-                #     new_sampler.run_mcmc(new_pos0,nfit[1])
-                    for j, result in enumerate(tqdm(new_sampler.sample(new_pos0,iterations=nfit[1]),total=nfit[1],smoothing=0.1)):
-                        pass
-                
-                new_burnin = int(0.5*nfit[1])
-                new_samplerChain = new_sampler.chain
-                new_samples = new_samplerChain[:, new_burnin:, :].reshape(-1, nfit[2])
-                
-                acpt_fracs = np.sum((np.sum(np.abs(new_samplerChain[:,:-1]-new_samplerChain[:,1:]),axis=2)>1e-15),axis=0)/new_samplerChain.shape[0]
-                minKeep = new_burnin
-                stats_vals = (acpt_fracs[minKeep:].min(),np.median(acpt_fracs[minKeep:]),np.mean(acpt_fracs[minKeep:]),acpt_fracs[minKeep:].max())
-                
-                fig = plt.figure(figsize=[12,6])
-                gs = gridspec.GridSpec(1,2,width_ratios=[3,1],wspace=0)
-                ax0 = plt.subplot(gs[:, 0])    
-                #plt.plot(np.arange(len(acpt_fracs))[minKeep:],acpt_fracs[minKeep:],lw=1,alpha=1)
-                plt.plot(np.arange(len(acpt_fracs)),acpt_fracs,lw=1,alpha=1)
-                acc_lim = plt.ylim()
-                plt.axvline(minKeep,c='r',label=f'Burnin ({burnin} steps)')
-                plt.axhline(stats_vals[1],label='Median: %.3f'%stats_vals[1],c='k',ls='--')
-                plt.axhline(stats_vals[2],label='Mean: %.3f'%stats_vals[2],c='k',ls='-')
-                plt.axhline(stats_vals[0],label='Min: %.3f\nMax: %.3f'%(stats_vals[0],stats_vals[-1]),c='grey')
-                plt.axhline(stats_vals[-1],c='grey')
-                plt.legend(loc='best')
-                ax0.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True)
-                plt.xlabel('Step Number')
-                plt.ylabel('Acceptance Fraction')
-                ax1 = plt.subplot(gs[:, 1])
-                ax1.axis('off')
-                plt.hist(acpt_fracs[minKeep:],bins=min(len(acpt_fracs)-minKeep,100),density=True,cumulative=True,histtype='step',lw=3,orientation='horizontal')
-                plt.axhline(stats_vals[1],label='Median: %.3f'%stats_vals[1],c='k',ls='--')
-                plt.axhline(stats_vals[2],label='Mean: %.3f'%stats_vals[2],c='k',ls='-')
-                plt.axhline(stats_vals[0],label='Min: %.3f\nMax: %.3f'%(stats_vals[0],stats_vals[-1]),c='grey')
-                plt.axhline(stats_vals[-1],c='grey')
-                #plt.legend(loc='best')
-                plt.ylim(acc_lim)
-                xlim = np.array(plt.xlim());xlim[-1] *= 1.15
-                plt.xlim(xlim)
-                plt.tight_layout()
-                plt.close('all')
-                # plt.show()
+        if fit_population_pms and (not skip_fitting):
                         
-                plt.figure(figsize=[13,9/5*nfit[2]])
-                for dim in range(nfit[2]):
-                    plt.subplot(nfit[2],1,dim+1)
-                    plt.plot(new_samplerChain[:,:,dim].T,alpha=0.25)
-                    if dim != nfit[2]-1:
-                        plt.xticks([])
-                    else:
-                        plt.xticks(np.arange(0, new_samplerChain.shape[1]+1, new_samplerChain.shape[1]/10).astype(int))
-                    plt.ylabel(new_dim_labels[dim])
-                    plt.axvline(x=new_burnin,lw=2,ls='--',c='r')
-                plt.xlabel('Step Number')
-                plt.tight_layout()
-                plt.close('all')
-                # plt.show()
+            if field not in ['COSMOS_field']:
+    #            n_sigma_plot = 1
+    #            too_far_x = (gaiahub_pms[unique_inds,0] <= gaiahub_pm_summary[0,0]-n_sigma_plot*gaiahub_pm_summary[0,1]) |\
+    #                        (gaiahub_pms[unique_inds,0] >= gaiahub_pm_summary[0,0]+n_sigma_plot*gaiahub_pm_summary[0,2])
+    #            too_far_y = (gaiahub_pms[unique_inds,1] <= gaiahub_pm_summary[1,0]-n_sigma_plot*gaiahub_pm_summary[1,1]) |\
+    #                        (gaiahub_pms[unique_inds,1] >= gaiahub_pm_summary[1,0]+n_sigma_plot*gaiahub_pm_summary[1,2])
+                            
+                n_sigma_plot = 1
+                too_far_x = (posterior_pm_meds[:,0] <= posterior_pm_summary[0,0]-n_sigma_plot*posterior_pm_summary[0,1]) |\
+                            (posterior_pm_meds[:,0] >= posterior_pm_summary[0,0]+n_sigma_plot*posterior_pm_summary[0,2])
+                too_far_y = (posterior_pm_meds[:,1] <= posterior_pm_summary[1,0]-n_sigma_plot*posterior_pm_summary[1,1]) |\
+                            (posterior_pm_meds[:,1] >= posterior_pm_summary[1,0]+n_sigma_plot*posterior_pm_summary[1,2])
+            else:
+    #            n_sigma_plot = 3
+    #            too_far_x = (gaia_pms[unique_inds,0] <= gaia_pm_summary[0,0]-n_sigma_plot*gaia_pm_summary[0,1]) |\
+    #                        (gaia_pms[unique_inds,0] >= gaia_pm_summary[0,0]+n_sigma_plot*gaia_pm_summary[0,2])
+    #            too_far_y = (gaia_pms[unique_inds,1] <= gaia_pm_summary[1,0]-n_sigma_plot*gaia_pm_summary[1,1]) |\
+    #                        (gaia_pms[unique_inds,1] >= gaia_pm_summary[1,0]+n_sigma_plot*gaia_pm_summary[1,2])
                 
-                def mu_vect_samples(theta):
-                    #use the sigma_feh,sigma_alpha,rho posterior samples to get samples of the mu vector
-                    #as well as theta_i and data_i samples
-                    sigma_feh,sigma_alpha,rho = theta
+#                n_sigma_plot = 3
+#                too_far_x = (posterior_pm_meds[:,0] <= posterior_pm_summary[0,0]-n_sigma_plot*posterior_pm_summary[0,1]) |\
+#                            (posterior_pm_meds[:,0] >= posterior_pm_summary[0,0]+n_sigma_plot*posterior_pm_summary[0,2])
+#                too_far_y = (posterior_pm_meds[:,1] <= posterior_pm_summary[1,0]-n_sigma_plot*posterior_pm_summary[1,1]) |\
+#                            (posterior_pm_meds[:,1] >= posterior_pm_summary[1,0]+n_sigma_plot*posterior_pm_summary[1,2])
+                too_far_x = np.zeros_like(unique_ids).astype(bool)
+                too_far_y = np.zeros_like(unique_ids).astype(bool)
                 
-                    cov_entries = sigma_feh**2,rho*sigma_feh*sigma_alpha,sigma_alpha**2
-                    curr_pop_cov = np.array([[cov_entries[0],cov_entries[1]],[cov_entries[1],cov_entries[2]]])
-                    curr_pop_inv_cov = np.linalg.inv(curr_pop_cov)
-        #            curr_pop_cov_det = np.linalg.det(curr_pop_cov)
-                
-                    summed_covs = curr_pop_cov+curr_covs
-        #            summed_cov_dets = np.linalg.det(summed_covs)
-                    summed_covs_inv = np.linalg.inv(summed_covs)
-                    S = np.linalg.inv(np.sum(summed_covs_inv,axis=0))
-                    m = np.dot(S,np.sum(np.sum(summed_covs_inv*curr_vals,axis=1),axis=0))
-                
-                    mu_sample = stats.multivariate_normal(m,S,allow_singular=True).rvs()
-                
-                    S_i_vals = np.linalg.inv(curr_pop_inv_cov+curr_inv_covs)
-                    m_i_temp_vals = curr_inv_cov_dot_vals+np.dot(curr_pop_inv_cov,mu_sample)
-                    m_i_vals = np.sum(S_i_vals*m_i_temp_vals.reshape((*m_i_temp_vals.shape,1)),axis=1)
-                    theta_samples = np.zeros((len(curr_vals),len(m)))
-                    data_samples = np.zeros_like(theta_samples)
-                    for j in range(len(theta_samples)):
-                        theta_samples[j] = stats.multivariate_normal(m_i_vals[j],S_i_vals[j],allow_singular=True).rvs()
-                        data_samples[j] = stats.multivariate_normal(theta_samples[j],curr_covs[j],allow_singular=True).rvs()
-                    return mu_sample,theta_samples,data_samples
-                
-                n_keep_samples = 1000
-                keep_samples = np.random.choice(len(new_samples),size=n_keep_samples,replace=False)
-                new_samples = new_samples[keep_samples]
-                mu_samples = np.zeros((len(new_samples),nfit[2]-1))
-                theta_samples = np.zeros((len(new_samples),len(curr_vals),nfit[2]-1))
-                data_samples = np.zeros_like(theta_samples)
-                
-                print('Drawing proper motion example samples:')
-                for j,sample in enumerate(tqdm(new_samples,total=len(new_samples))):
-                    mu_samples[j],theta_samples[j],data_samples[j] = mu_vect_samples(sample)
-                new_samples = np.hstack((new_samples,mu_samples))
-                
-                new_dim_labels.extend([r'$\mu_{\mu_{\mathrm{RA}}}$',r'$\mu_{\mu_{\mathrm{Dec}}}$'])
-                
-                corner.corner(new_samples, labels=new_dim_labels,              fontsize=10,quantiles=[0.16, 0.5, 0.84],show_titles=True)
-                plt.savefig(f'{outpath}{image_name}_posterior_population_PM_analysis_corner_plot.png')
-                plt.close('all')
-                # plt.show()
-                
-                np.save(f'{outpath}{image_name}_posterior_population_PM_analysis_samples.npy',new_samples)
-                
-                sigma_mu_x_2 = np.power(new_samples[:,0],2)
-                sigma_mu_y_2 = np.power(new_samples[:,1],2)
-                sigma_mu_x_y_rho = new_samples[:,0]*new_samples[:,1]*new_samples[:,2]
-                
-                median_mu_x_2 = np.median(sigma_mu_x_2)
-                median_mu_y_2 = np.median(sigma_mu_y_2)
-                median_mu_x_y_rho = np.median(sigma_mu_x_y_rho)
-                median_cov = np.array([[median_mu_x_2,median_mu_x_y_rho],[median_mu_x_y_rho,median_mu_y_2]])
-                
-                median_mu = np.median(mu_samples,axis=0)
-    #            offsets = np.copy(median_mu)
-                
-                alpha = 0.3
-                
-                plt.figure(figsize=(10,6))
-                len_data_samps = data_samples.shape[0]*data_samples.shape[1]
-                plt.hist2d(np.ravel(data_samples[:,:,0]),np.ravel(data_samples[:,:,1]),
-                           norm=mcolors.PowerNorm(0.3),bins=50,
-                           weights=np.ones(len_data_samps)/len_data_samps)
-                plt.xlabel(r'$\mu_{\mathrm{RA}}$ (mas/yr)')
-                plt.ylabel(r'$\mu_{\mathrm{Dec}}$ (mas/yr)')
-                ax = plt.gca()
-                ax.set_aspect('equal')
-                plt.colorbar(label='Bin Probability')
-                for data_ind in range(len(data_samples[0])):
-                    curr_x,curr_y = curr_vals[data_ind,0,0],curr_vals[data_ind,1,0]
-                    plt.scatter(curr_x,curr_y,
-                                marker='o',alpha=alpha,s=50,color='r')
-                    for err_ind in range(n_params):
-                        curr_vect = curr_err_vects[data_ind,err_ind]
-                        x_vals = [curr_x-curr_vect[0],curr_x+curr_vect[0]]
-                        y_vals = [curr_y-curr_vect[1],curr_y+curr_vect[1]]
-                        plt.plot(x_vals,y_vals,color='r',lw=2,alpha=alpha)
-                # plt.xlim(feh_lim)
-                # plt.ylim(alpha_lim)
-                plt.close('all')
-                # plt.show()
-                
-                pop_eig_vals,pop_eig_vects = np.linalg.eig(median_cov)
-                
-                ellipse_center = median_mu
-                ellipse_axis_lengths = np.sqrt(pop_eig_vals)
-                
-                angles = np.linspace(0,2*np.pi,1000)
-                ellipse_x = ellipse_axis_lengths[0]*np.cos(angles)
-                ellipse_y = ellipse_axis_lengths[1]*np.sin(angles)
-                
-                semi_major_axis_vect = pop_eig_vects[:,0]
-                rotate_angle = np.arctan2(semi_major_axis_vect[1],semi_major_axis_vect[0])
-                
-                #rotate the ellipse
-                new_ellipse_x = ellipse_x*np.cos(rotate_angle)-ellipse_y*np.sin(rotate_angle)
-                new_ellipse_y = ellipse_x*np.sin(rotate_angle)+ellipse_y*np.cos(rotate_angle)
-                
-                ellipse_x = new_ellipse_x+ellipse_center[0]
-                ellipse_y = new_ellipse_y+ellipse_center[1]
-                
-                pop_err_vects = np.zeros((2,2))
-                pop_err_vects[0] = np.sqrt(pop_eig_vals[0])*pop_eig_vects[:,0]
-                pop_err_vects[1] = np.sqrt(pop_eig_vals[1])*pop_eig_vects[:,1]
-                
-                plt.figure(figsize=(10,6))
-                len_data_samps = data_samples.shape[0]*data_samples.shape[1]
-                plt.xlabel(r'$\mu_{\mathrm{RA}}$ (mas/yr)')
-                plt.ylabel(r'$\mu_{\mathrm{Dec}}$ (mas/yr)')
-                ax = plt.gca()
-                ax.set_aspect('equal')
-                for data_ind in range(len(data_samples[0])):
-                    curr_x,curr_y = curr_vals[data_ind,0,0],curr_vals[data_ind,1,0]
-                    plt.scatter(curr_x,curr_y,
-                                marker='o',alpha=alpha,s=50,color='r')
-                    for err_ind in range(n_params):
-                        curr_vect = curr_err_vects[data_ind,err_ind]
-                        x_vals = [curr_x-curr_vect[0],curr_x+curr_vect[0]]
-                        y_vals = [curr_y-curr_vect[1],curr_y+curr_vect[1]]
-                        plt.plot(x_vals,y_vals,color='r',lw=2,alpha=alpha)
-                plt.plot(ellipse_x,ellipse_y)
-                for err_ind in range(len(pop_err_vects)):
-                    plt.plot([ellipse_center[0],ellipse_center[0]+pop_err_vects[err_ind,0]],
-                             [ellipse_center[1],ellipse_center[1]+pop_err_vects[err_ind,1]])
-                plt.axhline(0,c='k',lw=0.5,ls='--',alpha=0.7)
-                plt.axvline(0,c='k',lw=0.5,ls='--',alpha=0.7)
-                plt.savefig(f'{outpath}{image_name}_posterior_population_PM_offset_analysis_pop_dist.png')
-                plt.close('all')
-                # plt.show()
-                
-                plt.figure(figsize=(10,6))
-                pop_samps = stats.multivariate_normal(median_mu,median_cov).rvs(10000)
-                len_data_samps = len(pop_samps)
-                plt.hist2d(pop_samps[:,0],pop_samps[:,1],
-                           norm=mcolors.PowerNorm(0.3),bins=50,
-                           weights=np.ones(len_data_samps)/len_data_samps)
-                plt.xlabel(r'$\mu_{\mathrm{RA}}$ (mas/yr)')
-                plt.ylabel(r'$\mu_{\mathrm{Dec}}$ (mas/yr)')
-                ax = plt.gca()
-                ax.set_aspect('equal')
-                plt.colorbar(label='Bin Probability')
-                for data_ind in range(len(data_samples[0])):
-                    curr_x,curr_y = curr_vals[data_ind,0,0],curr_vals[data_ind,1,0]
-                    plt.scatter(curr_x,curr_y,
-                                marker='o',alpha=alpha,s=50,color='r')
-                    for err_ind in range(n_params):
-                        curr_vect = curr_err_vects[data_ind,err_ind]
-                        x_vals = [curr_x-curr_vect[0],curr_x+curr_vect[0]]
-                        y_vals = [curr_y-curr_vect[1],curr_y+curr_vect[1]]
-                        plt.plot(x_vals,y_vals,color='r',lw=2,alpha=alpha)
-                plt.plot(ellipse_x,ellipse_y)
-                for err_ind in range(len(pop_err_vects)):
-                    plt.plot([ellipse_center[0],ellipse_center[0]+pop_err_vects[err_ind,0]],
-                             [ellipse_center[1],ellipse_center[1]+pop_err_vects[err_ind,1]])
-                plt.close('all')
-                # plt.show()
+            keep_plot = ~too_far_x & ~too_far_y
             
+            #do full 2D covariance fitting of the proper motion offsets to see if we get 
+            #a mean of (0,0), a small covariance, and minimal correlation
+            
+            #2d versions of the fitting
+            #population cov = [[sigma_feh^2,rho*sigm_feh*sigma_alpha],[rho*sigm_feh*sigma_alpha,sigma_alpha^2]]
+            #use MH-MCMC to find the sigma_feh, sigma_alpha, and rho parameters
+            
+            err_scale = 1.0 #no scaling
+            # err_scale = np.sqrt(chi2_scale) #use the result of the 2D distance fitting
+            
+            curr_err_vects = np.copy(err_vectors[keep_plot])*err_scale
+            n_params = 2
+            curr_vals = np.copy(posterior_pm_meds[keep_plot])
+            curr_vals = curr_vals.reshape((*curr_vals.shape,1))
+            curr_covs = np.copy(posterior_pm_covs[keep_plot])*err_scale**2
+            
+            plt.figure(figsize=(7,7))
+            plt.grid(visible=True, which='major', color='#666666', linestyle='-',alpha=0.3)
+            plt.minorticks_on()
+            plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
+            plt.scatter(curr_vals[:,0,0],curr_vals[:,1,0],
+                        marker='o',alpha=0.7,s=50)
+            for j in range(len(curr_vals)):
+                for err_ind in range(n_params):
+                    curr_vect = curr_err_vects[j,err_ind]
+                    x_vals = [curr_vals[j,0,0]-curr_vect[0],curr_vals[j,0,0]+curr_vect[0]]
+                    y_vals = [curr_vals[j,1,0]-curr_vect[1],curr_vals[j,1,0]+curr_vect[1]]
+                    plt.plot(x_vals,y_vals,c='C0',lw=2,alpha=0.2,zorder=-1e10)
+            plt.axvline(0,c='C1',ls='-',zorder=-1e10)
+            plt.axhline(0,c='C1',ls='-',zorder=-1e10)
+            plt.xlabel(r'$\mu_{\mathrm{RA}}$ (mas/yr)')
+            plt.ylabel(r'$\mu_{\mathrm{Dec}}$ (mas/yr)')
+            ax = plt.gca()
+            ax.set_aspect('equal')
+            plt.tight_layout()
+            plt.close('all')
+            # plt.show()
+            
+            curr_inv_covs = np.linalg.inv(curr_covs)
+            curr_inv_cov_dot_vals = np.sum(curr_inv_covs*curr_vals,axis=1)
+            
+            #initial sigma_feh and sigma_alpha are based on total population indvidual dimension fits
+            try:
+                initial_sigma_x = np.std(curr_vals[:,0,0])
+                initial_sigma_y = np.std(curr_vals[:,1,0])
+            except:
+                initial_sigma_x = 1
+                initial_sigma_y = 1
+                
+            initial_sigma_x = max(1e-2,initial_sigma_x)
+            initial_sigma_y = max(1e-2,initial_sigma_y)
+                
+            initial_rho = 0
+            
+            nfit = 100*3,600,3
+            new_pos0 = np.zeros((nfit[0],nfit[2]))
+            
+            new_pos0[:,0] = initial_sigma_x+np.random.randn(nfit[0])*initial_sigma_x/10
+            new_pos0[:,1] = initial_sigma_y+np.random.randn(nfit[0])*initial_sigma_y/10
+            new_pos0[:,2] = initial_rho+np.random.randn(nfit[0])*0.05
+            
+            new_pos0[:,0] = np.maximum(1e-5,np.abs(new_pos0[:,0]))
+            new_pos0[:,1] = np.maximum(1e-5,np.abs(new_pos0[:,1]))
+            
+#            def lnpost_residuals(theta):
+#                sigma_feh,sigma_alpha,rho = theta
+#                if (sigma_feh <= 0) or (sigma_alpha <= 0) or (np.abs(rho) > 1):
+#                    return -np.inf
+#            
+#                cov_entries = sigma_feh**2,rho*sigma_feh*sigma_alpha,sigma_alpha**2
+#                curr_pop_cov = np.array([[cov_entries[0],cov_entries[1]],[cov_entries[1],cov_entries[2]]])
+#    #            curr_pop_inv_cov = np.linalg.inv(curr_pop_cov)
+#                curr_pop_cov_det = np.linalg.det(curr_pop_cov)
+#            
+#                summed_covs = curr_pop_cov+curr_covs
+#                summed_cov_dets = np.linalg.det(summed_covs)
+#                summed_covs_inv = np.linalg.inv(summed_covs)
+#                S = np.linalg.inv(np.sum(summed_covs_inv,axis=0))
+#                m = np.dot(S,np.sum(np.sum(summed_covs_inv*curr_vals,axis=1),axis=0))
+#            
+#                #y_vects - mean_vect
+#                curr_diff_from_mean = np.copy(curr_vals)
+#                curr_diff_from_mean[:,0] -= m[0]
+#                curr_diff_from_mean[:,1] -= m[1]
+#            
+#                exponent_term = -0.5*np.sum(np.sum(summed_covs_inv*curr_diff_from_mean,axis=1)*curr_diff_from_mean[:,:,0],axis=1)
+#            
+#                curr_pop_cov_lnprob = 0.5*np.log(curr_pop_cov_det)+np.sum(-0.5*np.log(summed_cov_dets)+exponent_term)
+#                if not np.isfinite(curr_pop_cov_lnprob):
+#                    return -np.inf
+#                
+#                return curr_pop_cov_lnprob
+            
+            new_dim_labels = [r'$\sigma_{\mu_{\mathrm{RA}}}$',r'$\sigma_{\mu_{\mathrm{Dec}}}$',r'$\rho$']
+            
+            print('\nFitting the proper motions population distribution:')
+            
+#            with Pool(n_threads) as pool:
+#                new_sampler = emcee.EnsembleSampler(nfit[0],nfit[2],lnpost_residuals,pool=pool)
+#            #     new_sampler.run_mcmc(new_pos0,nfit[1])
+#                for j, result in enumerate(tqdm(new_sampler.sample(new_pos0,iterations=nfit[1]),total=nfit[1],smoothing=0.1)):
+#                    pass
+                
+            new_samplerChain = np.zeros(((nfit[0],nfit[1],nfit[2])))
+            step_inds = np.arange(nfit[1]).astype(int)
+            walker_inds = np.arange(nfit[0]).astype(int)
+            
+            new_lnposts = np.zeros((nfit[0],nfit[1]))
+            accept_fracs = np.zeros(nfit[1])
+            new_pos_lnpost = np.zeros((nfit[0]))
+            previous_params = new_pos0
+            
+            step_ind = -1 #for the first call
+            
+            def lnpost_previous(walker_ind) -> np.ndarray:
+                params = previous_params[walker_ind]
+                return lnpost_pop_pms(params,
+                                      curr_covs,curr_vals,curr_inv_covs,curr_inv_cov_dot_vals,
+                                      seed=walker_ind+(step_ind+1)*(nfit[0]+1))
+            
+            def lnpost_new(walker_ind) -> np.ndarray:
+                params = new_params[walker_ind]
+                return lnpost_pop_pms(params,
+                                      curr_covs,curr_vals,curr_inv_covs,curr_inv_cov_dot_vals,
+                                      seed=walker_ind+(step_ind+1)*(nfit[0]+1))
+                            
+            for w_ind in range(nfit[0]):
+                vals = lnpost_previous(w_ind)
+                new_pos_lnpost[w_ind] = vals[0]
+                
+                curr_mean_draw = vals[[1,2]]
+                if w_ind == 0:
+                    new_pos_means = np.zeros((nfit[0],*curr_mean_draw.shape))                    
+                    
+                    new_samplerChain_means = np.zeros(((nfit[0],nfit[1],*curr_mean_draw.shape)))
+                    
+                new_pos_means[w_ind] = curr_mean_draw
+                    
+#            print('lnpost',pos_lnpost.min(),pos_lnpost.max(),np.nanmedian(pos_lnpost))
+            
+            stretch_val = 1.0
+            stretch_a = 1+stretch_val #recommended amount a=2.0
+            
+            for step_ind,_ in enumerate(tqdm(step_inds,total=nfit[1])):                
+                np.random.seed(step_ind)
+                if step_ind == 0:
+                    previous_params = new_pos0
+                    previous_lnpost = new_pos_lnpost
+                    previous_means = new_pos_means
+                
+                accepted_params = np.copy(previous_params)
+                accepted_lnposts = np.copy(previous_lnpost)
+                accepted_means = np.copy(previous_means)
+                        
+                prop_factors = np.zeros(nfit[0]) #nothing to account for in proposal distribution
+                new_params = np.copy(previous_params)
+    
+                #use the stretch move formalism (https://arxiv.org/pdf/1202.3665.pdf)
+                #code similar to https://github.com/dfm/emcee/blob/main/src/emcee/moves/stretch.py
+                    
+                #use stretch move for the first fitting iteration, code from DFM's emcee
+                n_splits = 2
+                randomize_split = True
+#                        live_dangerously = False
+                
+                inds = walker_inds % n_splits
+                if randomize_split:
+                    np.random.shuffle(inds)
+                    
+                for split in range(n_splits):
+                    S1 = (inds == split)
+        
+                    # Get the two halves of the ensemble.
+                    sets = [previous_params[inds == j] for j in range(n_splits)]
+                    s = sets[split]
+                    c = sets[:split] + sets[split + 1 :]
+                    
+                    c = np.concatenate(c, axis=0)
+                    Ns, Nc = len(s), len(c)
+                    zz = np.power((stretch_a-1.0)*np.random.rand(Ns)+1,2.0)/stretch_a
+                    prop_factors[S1] = (ndim - 1.0) * np.log(zz)
+                    rint = np.random.randint(Nc, size=(Ns,))
+                    new_params[S1] = c[rint] - (c[rint] - s) * zz[:, None]
+                    
+                if n_threads == 1:
+                    first = lnpost_new(walker_inds[0])
+                    
+                    new_vals = np.zeros((len(walker_inds),*first.shape))
+                    for j,walker_ind in enumerate(walker_inds):
+                        vals = lnpost_new(walker_ind)
+                        if j == 0:
+                            new_vals = np.zeros((len(walker_inds),*vals.shape))
+                        new_vals[j] = vals
+                else:
+                
+                    out_q = mp.Queue()
+                    chunksize = int(math.ceil(len(walker_inds) / float(n_threads)))
+                    procs = []
+                    
+                    for thread_ind in range(n_threads):
+                        args = (walker_inds[chunksize * thread_ind:chunksize * (thread_ind + 1)],nfit[0],thread_ind,
+                                new_params,step_ind,
+                                curr_covs,curr_vals,curr_inv_covs,curr_inv_cov_dot_vals,
+                                out_q)
+                        p = mp.Process(target=lnpost_pop_pms_parallel,
+                                       args=args)
+                        procs.append(p)
+                        p.start()
+                
+                    new_vals = np.zeros((nfit[0],2+1))
+                    for thread_ind in range(n_threads):
+                        vals,curr_thread = out_q.get()
+                        new_vals[chunksize * curr_thread:chunksize * (curr_thread + 1)] = vals
+                
+                    for p in procs:
+                        p.join()
+                                    
+                new_vals = np.array(new_vals)
+                new_lnpost = new_vals[:,0]
+                new_means = new_vals[:,[1,2]]
+    
+                #accept with MH condition
+#                print(step_ind,new_vals.shape)
+                lnpdiff = new_lnpost - previous_lnpost + prop_factors
+                accepted = np.log(np.random.rand(nfit[0])) < lnpdiff
+                
+                accepted_params[accepted] = new_params[accepted]
+                accepted_lnposts[accepted] = new_lnpost[accepted]
+                accepted_means[accepted] = new_means[accepted]
+                
+                accept_fracs[step_ind] = np.sum(accepted)/len(accepted)
+#                print(accept_fracs[step_ind],lnpdiff.min(),lnpdiff.max(),np.median(lnpdiff))
+                
+                new_samplerChain[:,step_ind] = accepted_params[:nfit[0]]
+                new_lnposts[:,step_ind] = accepted_lnposts[:nfit[0]]
+                new_samplerChain_means[:,step_ind] = accepted_means[:nfit[0]]
+                
+                previous_params = accepted_params
+                previous_lnpost = accepted_lnposts
+                previous_means = accepted_means
+                
+            new_burnin = int(0.5*nfit[1])
+            new_samples = new_samplerChain[:, new_burnin:, :].reshape((-1, nfit[2]))
+            if len(new_samples) > 30000:
+                chosen_inds = np.random.choice(len(new_samples),size=30000,replace=False)
+                new_samples = new_samples[chosen_inds]
+            else:
+                chosen_inds = np.arange(len(new_samples)).astype(int)
+            new_sample_means = (new_samplerChain_means[:, new_burnin:].reshape((-1, new_pos_means.shape[1])))[chosen_inds]
+#            new_sample_lnposts = (new_lnposts[:,new_burnin:].reshape((-1,1)))[chosen_inds]
+                            
+            acpt_fracs = np.sum((np.sum(np.abs(new_samplerChain[:,:-1]-new_samplerChain[:,1:]),axis=2)>1e-15),axis=0)/new_samplerChain.shape[0]
+            minKeep = new_burnin
+            stats_vals = (acpt_fracs[minKeep:].min(),np.median(acpt_fracs[minKeep:]),np.mean(acpt_fracs[minKeep:]),acpt_fracs[minKeep:].max())
+            
+            fig = plt.figure(figsize=[12,6])
+            gs = gridspec.GridSpec(1,2,width_ratios=[3,1],wspace=0)
+            ax0 = plt.subplot(gs[:, 0])    
+            #plt.plot(np.arange(len(acpt_fracs))[minKeep:],acpt_fracs[minKeep:],lw=1,alpha=1)
+            plt.plot(np.arange(len(acpt_fracs)),acpt_fracs,lw=1,alpha=1)
+            acc_lim = plt.ylim()
+            plt.axvline(minKeep,c='r',label=f'Burnin ({burnin} steps)')
+            plt.axhline(stats_vals[1],label='Median: %.3f'%stats_vals[1],c='k',ls='--')
+            plt.axhline(stats_vals[2],label='Mean: %.3f'%stats_vals[2],c='k',ls='-')
+            plt.axhline(stats_vals[0],label='Min: %.3f\nMax: %.3f'%(stats_vals[0],stats_vals[-1]),c='grey')
+            plt.axhline(stats_vals[-1],c='grey')
+            plt.legend(loc='best')
+            ax0.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True)
+            plt.xlabel('Step Number')
+            plt.ylabel('Acceptance Fraction')
+            ax1 = plt.subplot(gs[:, 1])
+            ax1.axis('off')
+            plt.hist(acpt_fracs[minKeep:],bins=min(len(acpt_fracs)-minKeep,100),density=True,cumulative=True,histtype='step',lw=3,orientation='horizontal')
+            plt.axhline(stats_vals[1],label='Median: %.3f'%stats_vals[1],c='k',ls='--')
+            plt.axhline(stats_vals[2],label='Mean: %.3f'%stats_vals[2],c='k',ls='-')
+            plt.axhline(stats_vals[0],label='Min: %.3f\nMax: %.3f'%(stats_vals[0],stats_vals[-1]),c='grey')
+            plt.axhline(stats_vals[-1],c='grey')
+            #plt.legend(loc='best')
+            plt.ylim(acc_lim)
+            xlim = np.array(plt.xlim());xlim[-1] *= 1.15
+            plt.xlim(xlim)
+            plt.tight_layout()
+            plt.savefig(f'{outpath}{image_name}_posterior_population_PM_analysis_accept_frac.png')
+            plt.close('all')
+            # plt.show()
+                    
+            plt.figure(figsize=[13,9/5*nfit[2]])
+            for dim in range(nfit[2]):
+                plt.subplot(nfit[2],1,dim+1)
+                plt.plot(new_samplerChain[:,:,dim].T,alpha=0.25)
+                if dim != nfit[2]-1:
+                    plt.xticks([])
+                else:
+                    plt.xticks(np.arange(0, new_samplerChain.shape[1]+1, new_samplerChain.shape[1]/10).astype(int))
+                plt.ylabel(new_dim_labels[dim])
+                plt.axvline(x=new_burnin,lw=2,ls='--',c='r')
+            plt.xlabel('Step Number')
+            plt.tight_layout()
+            plt.savefig(f'{outpath}{image_name}_posterior_population_PM_analysis_MCMC_walkers.png')
+            plt.close('all')
+            # plt.show()
+                        
+            new_samples = np.hstack((new_samples,new_sample_means))
+            
+            new_dim_labels.extend([r'$\mu_{\mu_{\mathrm{RA}}}$',r'$\mu_{\mu_{\mathrm{Dec}}}$'])
+            
+            corner.corner(new_samples, labels=new_dim_labels,
+                          fontsize=10,quantiles=[0.16, 0.5, 0.84],show_titles=True)
+            plt.savefig(f'{outpath}{image_name}_posterior_population_PM_analysis_corner_plot.png')
+            plt.close('all')
+            # plt.show()
+            
+            np.save(f'{outpath}{image_name}_posterior_population_PM_analysis_samples.npy',new_samples)
+            
+            sigma_mu_x_2 = np.power(new_samples[:,0],2)
+            sigma_mu_y_2 = np.power(new_samples[:,1],2)
+            sigma_mu_x_y_rho = new_samples[:,0]*new_samples[:,1]*new_samples[:,2]
+            
+            median_mu_x_2 = np.median(sigma_mu_x_2)
+            median_mu_y_2 = np.median(sigma_mu_y_2)
+            median_mu_x_y_rho = np.median(sigma_mu_x_y_rho)
+            median_cov = np.array([[median_mu_x_2,median_mu_x_y_rho],[median_mu_x_y_rho,median_mu_y_2]])
+            
+            median_mu = np.median(new_sample_means,axis=0)
+#            offsets = np.copy(median_mu)
+            
+            alpha = 0.3
+                        
+            pop_eig_vals,pop_eig_vects = np.linalg.eig(median_cov)
+            
+            ellipse_center = median_mu
+            ellipse_axis_lengths = np.sqrt(pop_eig_vals)
+            
+            angles = np.linspace(0,2*np.pi,1000)
+            ellipse_x = ellipse_axis_lengths[0]*np.cos(angles)
+            ellipse_y = ellipse_axis_lengths[1]*np.sin(angles)
+            
+            semi_major_axis_vect = pop_eig_vects[:,0]
+            rotate_angle = np.arctan2(semi_major_axis_vect[1],semi_major_axis_vect[0])
+            
+            #rotate the ellipse
+            new_ellipse_x = ellipse_x*np.cos(rotate_angle)-ellipse_y*np.sin(rotate_angle)
+            new_ellipse_y = ellipse_x*np.sin(rotate_angle)+ellipse_y*np.cos(rotate_angle)
+            
+            ellipse_x = new_ellipse_x+ellipse_center[0]
+            ellipse_y = new_ellipse_y+ellipse_center[1]
+            
+            pop_err_vects = np.zeros((2,2))
+            pop_err_vects[0] = np.sqrt(pop_eig_vals[0])*pop_eig_vects[:,0]
+            pop_err_vects[1] = np.sqrt(pop_eig_vals[1])*pop_eig_vects[:,1]
+            
+            plt.figure(figsize=(10,6))
+            plt.xlabel(r'$\mu_{\mathrm{RA}}$ (mas/yr)')
+            plt.ylabel(r'$\mu_{\mathrm{Dec}}$ (mas/yr)')
+            ax = plt.gca()
+            ax.set_aspect('equal')
+            for data_ind in range(len(curr_vals)):
+                curr_x,curr_y = curr_vals[data_ind,0,0],curr_vals[data_ind,1,0]
+                plt.scatter(curr_x,curr_y,
+                            marker='o',alpha=alpha,s=50,color='r')
+                for err_ind in range(n_params):
+                    curr_vect = curr_err_vects[data_ind,err_ind]
+                    x_vals = [curr_x-curr_vect[0],curr_x+curr_vect[0]]
+                    y_vals = [curr_y-curr_vect[1],curr_y+curr_vect[1]]
+                    plt.plot(x_vals,y_vals,color='r',lw=2,alpha=alpha)
+            plt.plot(ellipse_x,ellipse_y)
+            for err_ind in range(len(pop_err_vects)):
+                plt.plot([ellipse_center[0],ellipse_center[0]+pop_err_vects[err_ind,0]],
+                         [ellipse_center[1],ellipse_center[1]+pop_err_vects[err_ind,1]])
+            plt.axhline(0,c='k',lw=0.5,ls='--',alpha=0.7)
+            plt.axvline(0,c='k',lw=0.5,ls='--',alpha=0.7)
+            plt.savefig(f'{outpath}{image_name}_posterior_population_PM_offset_analysis_pop_dist.png')
+            plt.close('all')
+            # plt.show()
+                        
     if not skip_fitting:
         del samplerChain
         del samples

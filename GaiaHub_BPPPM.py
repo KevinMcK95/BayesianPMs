@@ -102,6 +102,10 @@ def gaiahub_BPMs(argv):
                         action='store_true', 
                         default=True,
                         help = 'Plot the PM measurments for individual stars. Good for diagnostics.')
+    parser.add_argument('--fit_population_pms', 
+                        action='store_true', 
+                        default=False,
+                        help = 'Fit a 2D Gaussian population distribution to the posterior PM measurements. Default False.')
     parser.add_argument('--image_names', type=str, 
                         nargs='+', 
                         default = "y", 
@@ -139,6 +143,7 @@ def gaiahub_BPMs(argv):
     redo_without_outliers = args.repeat_first_fit
     plot_indv_star_pms = args.plot_indv_star_pms
     n_threads = args.n_processes
+    fit_population_pms = args.fit_population_pms
     individual_fit_only = args.individual_fit_only
     
     #probably want to figure out how to ask the user for a thresh_time
@@ -195,13 +200,16 @@ def gaiahub_BPMs(argv):
             plot_string = ''
             if plot_indv_star_pms:
                 plot_string = '--plot_indv_star_pms '
+            pop_fit_string = ''
+            if fit_population_pms:
+                pop_fit_string = '--fit_population_pms '
                 
             #use os.system call so that each image set analysis is separate 
             #to prevent a creep of memory leak (probably from numpy) that 
             #uses up all the RAM and slows down the calculations significantly
             os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
                       f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
-                      f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}")
+                      f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}{pop_fit_string}")
             
                         
 #            BPM.analyse_images(entry,
@@ -219,6 +227,7 @@ def gaiahub_BPMs(argv):
         
 
     else:
+        
         BPM.analyse_images(image_names,
                        field,path,
                        overwrite_previous=overwrite_previous,
@@ -229,7 +238,8 @@ def gaiahub_BPMs(argv):
                        redo_without_outliers=redo_without_outliers,
                        max_stars=max_stars,
                        plot_indv_star_pms=plot_indv_star_pms,
-                       n_threads = n_threads)
+                       fit_population_pms=fit_population_pms,
+                       n_threads=n_threads)
 
     return 
 
@@ -241,7 +251,6 @@ if __name__ == '__main__':
     
     if not testing:
         gaiahub_BPMs(sys.argv[1:])
-        
     else:
         fields = [
         '47Tuc',
