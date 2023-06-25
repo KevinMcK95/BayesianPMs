@@ -238,16 +238,23 @@ def link_images(field,path,
                 #then make a new entry
                 linked_image_list.append(full_linked_images[image_name])
     #also loop over the individual image links, adding them if not included
+    temp_list = []
     for image_ind,image_name in enumerate(image_names):
         poss_list = linked_image_info[image_name]['image_name'].to_list()
-        if poss_list not in linked_image_list:
-            linked_image_list.insert(0,poss_list)
+        if (poss_list not in linked_image_list) and (poss_list not in temp_list):
+            temp_list.append(poss_list)
+    temp_list.extend(linked_image_list)
+    linked_image_list = temp_list
                 
     print(f'Found {len(linked_image_list)} sets of linked HST images.')
-                
+    
+    temp_list = []
     for image_ind,image_name in enumerate(image_names):
-        if [image_name] not in linked_image_list:
-            linked_image_list.insert(image_ind,[image_name])
+        poss_list = [image_name]
+        if (poss_list not in linked_image_list) and (poss_list not in temp_list):
+            temp_list.append(poss_list)
+    temp_list.extend(linked_image_list)
+    linked_image_list = temp_list
     print(f'Must perform {len(linked_image_list)} analyses.')
     print()
     
