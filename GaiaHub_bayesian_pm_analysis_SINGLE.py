@@ -838,6 +838,7 @@ def analyse_images(image_list,field,path,
             
             while (fit_count < n_fit_max):
                 start_time = time.time()
+                final_fit_count = fit_count
                 
                 data_combined[mask_name] = {'X':[],'Y':[],'X_G':[],'Y_G':[],
                                             'dX_G':[],'dY_G':[],'g_mag':[],'Gaia_id':[],
@@ -3113,9 +3114,7 @@ def analyse_images(image_list,field,path,
     #        break
             if skip_fitting:
                 continue
-            
-            final_fit_count = fit_count
-            
+                        
             print()
             total_fit_end = time.time()
             print(f'Done fitting. Total process took {round(total_fit_end-total_fit_start,2)} seconds.')
