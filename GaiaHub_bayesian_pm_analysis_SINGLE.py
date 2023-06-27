@@ -47,6 +47,7 @@ from concurrent.futures import ProcessPoolExecutor
 # import itertools    
 
 import process_GaiaHub_outputs as process_GH
+import all_source_matcher as source_match
 
 n_max_threads = cpu_count()
 
@@ -59,6 +60,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 #used to decide if previous analyses should automatically be overwritten because of newer version of code 
 last_update_time = (datetime.datetime(2023, 6, 23, 15, 43, 58, 385797)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
 final_file_ext = '_fit_summary.csv'
+final_file_ext = '_posterior_transformation_6p_matrix_params_covs.npy'
 
 def gaiahub_single_BPMs(argv):  
     """
@@ -116,7 +118,14 @@ def gaiahub_single_BPMs(argv):
     parser.add_argument('--n_processes', type = int, 
                         default = n_max_threads, 
                         help='The number of jobs to run in parallel. Default uses all the available processors. For single-threaded execution use 1.')
-   
+
+    parser.add_argument('--fit_all_hst', 
+                        action='store_true', 
+                        default=True,
+                        help = 'Find all HST-identified sources (even those without Gaia matches) and cross-matches between HST images.'+\
+                        ' THIS IS A BETA FEATURE! THE CROSS-MATCHING WILL LIKELY BE IMPROVED IN THE FUTURE!'+\
+                        ' Default True, but only used when one or more HST images share additional sources.')
+
     if len(argv)==0:
         parser.print_help(sys.stderr)
         sys.exit(1)
@@ -134,6 +143,7 @@ def gaiahub_single_BPMs(argv):
     plot_indv_star_pms = args.plot_indv_star_pms
     n_threads = args.n_processes
     fit_population_pms = args.fit_population_pms
+    fit_all_hst = args.fit_all_hst
     
     #probably want to figure out how to ask the user for a thresh_time
     thresh_time = last_update_time
@@ -152,7 +162,8 @@ def gaiahub_single_BPMs(argv):
                    max_stars=max_stars,
                    plot_indv_star_pms=plot_indv_star_pms,
                    n_threads=n_threads,
-                   fit_population_pms=fit_population_pms)
+                   fit_population_pms=fit_population_pms,
+                   fit_all_hst=fit_all_hst)
 
     return 
 
@@ -662,7 +673,7 @@ def analyse_images(image_list,field,path,
                    overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0,
                    n_fit_max=3,max_images=10,redo_without_outliers=True,max_stars=2000,
                    plot_indv_star_pms=True,fit_population_pms=False,n_threads=n_max_threads,
-                   fit_all_hst=False):
+                   fit_all_hst=True):
     '''
     Simultaneously analyzes the images in image_list in field along path
     '''
@@ -698,10 +709,6 @@ def analyse_images(image_list,field,path,
     
     trans_file_summaries = {field:new_df}
     
-    print(image_list)
-    print(image_mjds)
-    print(trans_file_summaries[field])
-
     #for each of the images, read in the individual source data
     indv_image_source_data = {field:{}}
     for image_ind,image_name in enumerate(image_list):
@@ -714,7 +721,6 @@ def analyse_images(image_list,field,path,
                 indv_image_source_data[field][key] = []
             indv_image_source_data[field][key].append(np.array(curr_image_df[key]))
                         
-            
     if len(image_list) == 1:
         fit_all_hst = False
         
@@ -726,19 +732,40 @@ def analyse_images(image_list,field,path,
             for key in curr_image_df.keys():
                 if image_ind == 0:
                     indv_image_source_data_HST[field][key] = []
+                indv_image_source_data_HST[field][key].append([])
+                    
         else:
             if not os.path.isfile(f'{outpath}/{image_name}/{image_name}_gaiahub_source_summaries_ALL_HST.csv'):
-                for key in curr_image_df.keys():
-                    if image_ind == 0:
-                        indv_image_source_data_HST[field][key] = []
-                continue
-#                process_GH.image_lister(field,path)
+                source_match.source_matcher(field,path)
+#                for key in curr_image_df.keys():
+#                    if image_ind == 0:
+#                        indv_image_source_data_HST[field][key] = []
+#                continue
                 
             curr_image_df = pd.read_csv(f'{outpath}/{image_name}/{image_name}_gaiahub_source_summaries_ALL_HST.csv')
             for key in curr_image_df.keys():
                 if image_ind == 0:
                     indv_image_source_data_HST[field][key] = []
                 indv_image_source_data_HST[field][key].append(np.array(curr_image_df[key]))
+    all_extra_names = []
+    for image_ind,image_name in enumerate(image_list):
+        extra_names_in_image = indv_image_source_data_HST[field]['Gaia_id'][image_ind]
+        good_vals = (indv_image_source_data_HST[field]['q_hst'][image_ind] > 0)
+        all_extra_names.extend(extra_names_in_image[good_vals])
+    curr_unique_id,curr_unique_counts = np.unique(all_extra_names,return_counts=True)
+    #only use the extra HST sources that are in at least 2 of the images being considered
+    appears_mult_names = curr_unique_id[curr_unique_counts > 1]
+#    print(appears_mult_names,len(appears_mult_names))
+    for image_ind,image_name in enumerate(image_list):
+        extra_names_in_image = indv_image_source_data_HST[field]['Gaia_id'][image_ind]
+        keep_extra = np.zeros(len(extra_names_in_image)).astype(bool)
+        for name_ind,name in enumerate(extra_names_in_image):
+            if name in appears_mult_names:
+                keep_extra[name_ind] = True
+        if 'appear_multiple' not in indv_image_source_data_HST[field]:
+            indv_image_source_data_HST[field]['appear_multiple'] = []
+        indv_image_source_data_HST[field]['appear_multiple'].append(keep_extra)
+#        print(image_ind,image_name,np.sum(keep_extra),len(keep_extra))
             
     linked_image_lists = [image_list]
             
@@ -935,7 +962,7 @@ def analyse_images(image_list,field,path,
                         param_outputs[image_ind] = xo,yo,wo,zo,ag,bg,cg,dg,rot_sign
     #                    print(ag,bg,wo,zo,cg,dg)
                     xo,yo,wo,zo,ag,bg,cg,dg,rot_sign = param_outputs[image_ind]
-                    print(ii,hst_image,hst_image in previous_analysis_results,ag,bg,cg,dg)
+#                    print(ii,hst_image,hst_image in previous_analysis_results,ag,bg,cg,dg)
                     
                 min_n_stars = 5
                 ave_param_vals = {}
@@ -1089,8 +1116,9 @@ def analyse_images(image_list,field,path,
                         gaiahub_pm_y_err = indv_image_source_data_HST[mask_name]['gaiahub_pm_y_err'][orig_ind]
                         
                         curr_stationary = indv_image_source_data_HST[mask_name]['stationary'][orig_ind]
-                        
-                        keep = (q_hst > 0)
+                        appear_multiple = indv_image_source_data_HST[mask_name]['appear_multiple'][orig_ind]
+                        keep = (q_hst > 0) & (appear_multiple)
+#                        print(np.sum((q_hst > 0)),np.sum(appear_multiple),np.sum(keep),len(keep))
                         
                         data_combined[mask_name]['Gaia_id'].extend(gaia_id[keep])
                         data_combined[mask_name]['q_hst'].extend(q_hst[keep])
@@ -1115,29 +1143,7 @@ def analyse_images(image_list,field,path,
                     
                 for param in data_combined[mask_name]:
                     data_combined[mask_name][param] = np.array(data_combined[mask_name][param])
-                    
-                ratio_means = np.zeros(len(param_outputs))
-                rot_means = np.zeros(len(param_outputs))
-                on_skew_means = np.zeros(len(param_outputs))
-                off_skew_means = np.zeros(len(param_outputs))
-                w0_means = np.zeros(len(param_outputs))
-                z0_means = np.zeros(len(param_outputs))
-                
-                for j,orig_ind in enumerate(keep_im_nums):
-                    xo,yo,wo,zo,ag,bg,cg,dg,rot_sign = param_outputs[j]
-                    a,b,c,d = ag,bg,cg,dg
-                    ratio = np.sqrt(a*d-b*c)
-                    rot = np.arctan2(b-c,a+d)*180/np.pi
-                    on_skew = 0.5*(a-d)
-                    off_skew = 0.5*(b+c)
-                    
-                    ratio_means[j] = ratio
-                    rot_means[j] = rot
-                    on_skew_means[j] = on_skew
-                    off_skew_means[j] = off_skew
-                    w0_means[j] = wo
-                    z0_means[j] = zo
-                    
+                                        
                 gaia_id = np.copy(data_combined[mask_name]['Gaia_id'])
                 sort_gaia_id_inds = np.argsort(gaia_id)
                 if len(sort_gaia_id_inds) > max_stars:
@@ -1706,6 +1712,27 @@ def analyse_images(image_list,field,path,
                 z0s = recent_trans_params[3::n_param_indv]
                 cgs = recent_trans_params[4::n_param_indv]
                 dgs = recent_trans_params[5::n_param_indv]
+                
+                ratio_means = np.zeros(len(param_outputs))
+                rot_means = np.zeros(len(param_outputs))
+                on_skew_means = np.zeros(len(param_outputs))
+                off_skew_means = np.zeros(len(param_outputs))
+                w0_means = np.zeros(len(param_outputs))
+                z0_means = np.zeros(len(param_outputs))
+                
+                for j,orig_ind in enumerate(keep_im_nums):
+                    a,b,c,d = ags[j],bgs[j],cgs[j],dgs[j]
+                    ratio = np.sqrt(a*d-b*c)
+                    rot = np.arctan2(b-c,a+d)*180/np.pi
+                    on_skew = 0.5*(a-d)
+                    off_skew = 0.5*(b+c)
+                    
+                    ratio_means[j] = ratio
+                    rot_means[j] = rot
+                    on_skew_means[j] = on_skew
+                    off_skew_means[j] = off_skew
+                    w0_means[j] = w0s[j]
+                    z0_means[j] = z0s[j]
                 
                 if fit_count == 0:
                     proper_offset_jacs /= indv_orig_pixel_scales[:,None,None] #scale by the pixel scale

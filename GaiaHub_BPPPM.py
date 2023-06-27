@@ -142,7 +142,14 @@ def gaiahub_BPMs(argv):
     parser.add_argument('--n_processes', type = int, 
                         default = n_max_threads, 
                         help='The number of jobs to run in parallel. Default uses all the available processors. For single-threaded execution use 1.')
-   
+
+    parser.add_argument('--fit_all_hst', 
+                        action='store_true', 
+                        default=True,
+                        help = 'Find all HST-identified sources (even those without Gaia matches) and cross-matches between HST images.'+\
+                        ' THIS IS A BETA FEATURE! THE CROSS-MATCHING WILL LIKELY BE IMPROVED IN THE FUTURE!'+\
+                        ' Default True, but only used when one or more HST images share additional sources.')
+
     if len(argv)==0:
         parser.print_help(sys.stderr)
         sys.exit(1)
@@ -161,6 +168,7 @@ def gaiahub_BPMs(argv):
     n_threads = args.n_processes
     fit_population_pms = args.fit_population_pms
     individual_fit_only = args.individual_fit_only
+    fit_all_hst = args.fit_all_hst
     
     #probably want to figure out how to ask the user for a thresh_time
     thresh_time = last_update_time
@@ -182,6 +190,7 @@ def gaiahub_BPMs(argv):
                                         overwrite_previous=overwrite_previous,
                                         overwrite_GH_summaries=overwrite_GH_summaries,
                                         thresh_time=thresh_time)
+        
         if individual_fit_only:
             temp_list = []
             for entry in linked_image_list:
@@ -219,13 +228,16 @@ def gaiahub_BPMs(argv):
             pop_fit_string = ''
             if fit_population_pms:
                 pop_fit_string = '--fit_population_pms '
+            fit_all_hst_string = ''
+            if fit_all_hst:
+                fit_all_hst_string = '--fit_all_hst '
                 
             #use os.system call so that each image set analysis is separate 
             #to prevent a creep of memory leak (probably from numpy) that 
             #uses up all the RAM and slows down the calculations significantly
             os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
                       f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
-                      f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}{pop_fit_string}")
+                      f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}{pop_fit_string}{fit_all_hst_string}")
             
                         
 #            BPM.analyse_images(entry,
@@ -255,7 +267,8 @@ def gaiahub_BPMs(argv):
                        max_stars=max_stars,
                        plot_indv_star_pms=plot_indv_star_pms,
                        fit_population_pms=fit_population_pms,
-                       n_threads=n_threads)
+                       n_threads=n_threads,
+                       fit_all_hst=fit_all_hst)
 
     return 
 
@@ -288,16 +301,13 @@ if __name__ == '__main__':
         thresh_time = last_update_time
         
         linked_image_list = [
-                            ['j8pu79lrq'],['j8pu79m2q'],['j8pu74mqq'],
-                            ['j8pu79lrq','j8pu79m2q'],
-                            ['j8pu79lrq','j8pu79m2q','j8pu74mqq'],
                             ['j8pu6ohyq'],['j8pu6oi1q'],['j8pu6oi4q'],['j8pu6oi8q'],
                             ['j8pu6ohyq','j8pu6oi1q'],
                             ['j8pu6ohyq','j8pu6oi1q','j8pu6oi4q'],
-                            ['j8pu6ohyq','j8pu6oi1q','j8pu6oi8q'],
-                            ]
-        linked_image_list = [
-                            ['j8pu6ohyq']
+                            ['j8pu6ohyq','j8pu6oi1q','j8pu6oi4q','j8pu6oi8q'],
+#                            ['j8pu79lrq'],['j8pu79m2q'],['j8pu74mqq'],
+#                            ['j8pu79lrq','j8pu79m2q'],
+#                            ['j8pu79lrq','j8pu79m2q','j8pu74mqq'],
                             ]
         
         for entry_ind,entry in enumerate(linked_image_list):
