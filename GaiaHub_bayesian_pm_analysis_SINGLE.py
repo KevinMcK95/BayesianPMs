@@ -237,12 +237,14 @@ def link_images(field,path,
             if not found_match:
                 #then make a new entry
                 linked_image_list.append(full_linked_images[image_name])
+#    linked_image_list = list(np.unique(linked_image_list))
     #also loop over the individual image links, adding them if not included
     temp_list = []
     for image_ind,image_name in enumerate(image_names):
         poss_list = linked_image_info[image_name]['image_name'].to_list()
         if (poss_list not in linked_image_list) and (poss_list not in temp_list):
             temp_list.append(poss_list)
+#    temp_list = list(np.unique(temp_list))
     temp_list.extend(linked_image_list)
     linked_image_list = temp_list
                 
@@ -253,6 +255,7 @@ def link_images(field,path,
         poss_list = [image_name]
         if (poss_list not in linked_image_list) and (poss_list not in temp_list):
             temp_list.append(poss_list)
+#    temp_list = list(np.unique(temp_list))
     temp_list.extend(linked_image_list)
     linked_image_list = temp_list
     print(f'Must perform {len(linked_image_list)} analyses.')
@@ -658,14 +661,15 @@ def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_i
 def analyse_images(image_list,field,path,
                    overwrite_previous=True,overwrite_GH_summaries=False,thresh_time=0,
                    n_fit_max=3,max_images=10,redo_without_outliers=True,max_stars=2000,
-                   plot_indv_star_pms=True,fit_population_pms=False,n_threads=n_max_threads):
+                   plot_indv_star_pms=True,fit_population_pms=False,n_threads=n_max_threads,
+                   fit_all_hst=False):
     '''
     Simultaneously analyzes the images in image_list in field along path
     '''
     
     outpath = f'{path}{field}/Bayesian_PMs/'
     if (not os.path.isfile(f'{outpath}gaiahub_image_transformation_summaries.csv')) or (overwrite_GH_summaries):
-        print('Generating new GaiaHub summary files for field {field}.')
+        print(f'Generating new GaiaHub summary files for field {field}.')
         process_GH.collect_gaiahub_results(field,path=path,overwrite=overwrite_GH_summaries)
         process_GH.image_lister(field,path)
         
@@ -674,14 +678,29 @@ def analyse_images(image_list,field,path,
     allowed_image_names = np.array(trans_file_df['image_name'].to_list())
     keep_im_names = np.zeros(len(allowed_image_names)).astype(bool)
     keep_list_names = np.ones(len(image_list)).astype(bool)
+    image_mjds = np.zeros(len(image_list))*np.nan
     for name_ind,name in enumerate(image_list):
         if name not in allowed_image_names:
             keep_list_names[name_ind] = False
         else:
             match_ind = np.where(name == allowed_image_names)[0][0]
             keep_im_names[match_ind] = True
+            image_mjds[name_ind] = trans_file_df['HST_time'][match_ind]
+            
     image_list = np.array(image_list)[keep_list_names]
-    trans_file_summaries = {field:trans_file_df.loc[np.where(keep_im_names)[0]]}
+    image_mjds = image_mjds[keep_list_names]
+    time_sort = np.argsort(image_mjds)
+    image_list = image_list[time_sort]
+    image_mjds = image_mjds[time_sort]
+    
+    new_df = trans_file_df.loc[np.where(keep_im_names)[0]]
+    image_list = new_df['image_name'].to_numpy()
+    
+    trans_file_summaries = {field:new_df}
+    
+    print(image_list)
+    print(image_mjds)
+    print(trans_file_summaries[field])
 
     #for each of the images, read in the individual source data
     indv_image_source_data = {field:{}}
@@ -695,6 +714,32 @@ def analyse_images(image_list,field,path,
                 indv_image_source_data[field][key] = []
             indv_image_source_data[field][key].append(np.array(curr_image_df[key]))
                         
+            
+    if len(image_list) == 1:
+        fit_all_hst = False
+        
+    #for each of the images, read in the individual source data
+    indv_image_source_data_HST = {field:{}}
+    for image_ind,image_name in enumerate(image_list):
+        if not fit_all_hst:
+            #make an empty dictionary
+            for key in curr_image_df.keys():
+                if image_ind == 0:
+                    indv_image_source_data_HST[field][key] = []
+        else:
+            if not os.path.isfile(f'{outpath}/{image_name}/{image_name}_gaiahub_source_summaries_ALL_HST.csv'):
+                for key in curr_image_df.keys():
+                    if image_ind == 0:
+                        indv_image_source_data_HST[field][key] = []
+                continue
+#                process_GH.image_lister(field,path)
+                
+            curr_image_df = pd.read_csv(f'{outpath}/{image_name}/{image_name}_gaiahub_source_summaries_ALL_HST.csv')
+            for key in curr_image_df.keys():
+                if image_ind == 0:
+                    indv_image_source_data_HST[field][key] = []
+                indv_image_source_data_HST[field][key].append(np.array(curr_image_df[key]))
+            
     linked_image_lists = [image_list]
             
     ####Below is code for fitting no terms globally for all images in each mask group
@@ -837,16 +882,20 @@ def analyse_images(image_list,field,path,
                             previous_pm_results['running_total'][gaia_id] = [np.zeros(len(previous_pm_results[name][gaia_id])),0]
                         previous_pm_results['running_total'][gaia_id][0] += previous_pm_results[name][gaia_id]
                         previous_pm_results['running_total'][gaia_id][1] += 1
-            for star_name in previous_pm_results['running_total']:
-                previous_pm_results['average'][star_name] = previous_pm_results['running_total'][gaia_id][0]/previous_pm_results['running_total'][gaia_id][1]
+            for gaia_id in previous_pm_results['running_total']:
+                previous_pm_results['average'][gaia_id] = previous_pm_results['running_total'][gaia_id][0]/previous_pm_results['running_total'][gaia_id][1]
                             
             fit_count = 0 #iteration of the number of fits performed
             total_fit_start = time.time()
             
+            if len(keep_im_nums) == 1:
+                #only fit the too-faint, no-Gaia-info HST sources if using multiple HST images
+                fit_all_hst = False
+            
             while (fit_count < n_fit_max):
                 start_time = time.time()
                 final_fit_count = fit_count
-                
+                                
                 data_combined[mask_name] = {'X':[],'Y':[],'X_G':[],'Y_G':[],
                                             'dX_G':[],'dY_G':[],'g_mag':[],'Gaia_id':[],
                                             'img_num':[],'avg_params':{},'orig_pixel_scale':[],
@@ -874,7 +923,6 @@ def analyse_images(image_list,field,path,
                 for ii,param in enumerate(trans_params):
             #         print(param,np.where(~np.isfinite(trans_file_summaries[mask_name][param]))[0])
                     param_outputs[:,ii] = np.array(trans_file_summaries[mask_name][param])[keep_im_nums]
-                    
 #                ra_centers = trans_file_summaries[mask_name]['ra'][keep_im_nums]
 #                dec_centers = trans_file_summaries[mask_name]['dec'][keep_im_nums]
                 for image_ind,hst_image in enumerate(hst_image_names):
@@ -886,7 +934,9 @@ def analyse_images(image_list,field,path,
                         ag,bg,wo,zo,cg,dg = previous_analysis_results[hst_image][0]
                         param_outputs[image_ind] = xo,yo,wo,zo,ag,bg,cg,dg,rot_sign
     #                    print(ag,bg,wo,zo,cg,dg)
-                                    
+                    xo,yo,wo,zo,ag,bg,cg,dg,rot_sign = param_outputs[image_ind]
+                    print(ii,hst_image,hst_image in previous_analysis_results,ag,bg,cg,dg)
+                    
                 min_n_stars = 5
                 ave_param_vals = {}
                 for param in poss_fixed_params:
@@ -998,25 +1048,71 @@ def analyse_images(image_list,field,path,
                     data_combined[mask_name]['img_num'].extend([j]*len(x_orig))
                     data_combined[mask_name]['HST_times'].extend(hst_times)
                     data_combined[mask_name]['Gaia_times'].extend(gaia_times)
-    #                data_combined[mask_name]['gaia_pm_x'].extend(gaia_pm_x)
-    #                data_combined[mask_name]['gaia_pm_y'].extend(gaia_pm_y)
-    #                data_combined[mask_name]['gaia_pm_x_err'].extend(gaia_pm_x_err)
-    #                data_combined[mask_name]['gaia_pm_y_err'].extend(gaia_pm_y_err)
-    #                data_combined[mask_name]['gaia_pm_x_y_corr'].extend(gaia_pm_x_y_corr)
-    #                data_combined[mask_name]['gaia_ra'].extend(gaia_ra)
-    #                data_combined[mask_name]['gaia_dec'].extend(gaia_dec)
-    #                data_combined[mask_name]['gaia_ra_err'].extend(gaia_ra_err)
-    #                data_combined[mask_name]['gaia_dec_err'].extend(gaia_dec_err)
-    #                data_combined[mask_name]['gaia_ra_dec_corr'].extend(gaia_ra_dec_corr)
-    #                data_combined[mask_name]['gaia_parallax'].extend(gaia_parallax)
-    #                data_combined[mask_name]['gaia_parallax_err'].extend(gaia_parallax_err)
                     data_combined[mask_name]['stationary'].extend(curr_stationary)
                     data_combined[mask_name]['gaiahub_pm_x'].extend(gaiahub_pm_x)
                     data_combined[mask_name]['gaiahub_pm_y'].extend(gaiahub_pm_y)
                     data_combined[mask_name]['gaiahub_pm_x_err'].extend(gaiahub_pm_x_err)
                     data_combined[mask_name]['gaiahub_pm_y_err'].extend(gaiahub_pm_y_err)
                     data_combined[mask_name]['use_for_fit'].extend(use_for_fit)
-    
+                    
+                    if fit_all_hst:
+                        #ONLY DO THIS IF THE TIME BETWEEN HST FRAMES IS SIGNIFICANT ENOUGH TO MEASURE PMs
+                        
+                        #read in the XY positions of all the sources in HST
+                        
+                        #transform the positions to XY in Gaia, then cross match between the HST lists
+                        
+                        #Use the dX_G,dY_G from the center to get dRA,dDec to give Gaia-estimate of RA,Dec
+                        
+                        #Give large position uncertainty to these points in Gaia
+                        
+                        x_hst_err = indv_image_source_data_HST[mask_name]['x_hst_err'][orig_ind]
+                        y_hst_err = indv_image_source_data_HST[mask_name]['y_hst_err'][orig_ind]
+                        gaia_id = indv_image_source_data_HST[mask_name]['Gaia_id'][orig_ind]
+                        x_orig = indv_image_source_data_HST[mask_name]['X'][orig_ind]
+                        y_orig = indv_image_source_data_HST[mask_name]['Y'][orig_ind]
+                        x_gaia = indv_image_source_data_HST[mask_name]['X_G'][orig_ind]
+                        y_gaia = indv_image_source_data_HST[mask_name]['Y_G'][orig_ind]
+                        dx_orig = indv_image_source_data_HST[mask_name]['dX_G'][orig_ind]
+                        dy_orig = indv_image_source_data_HST[mask_name]['dY_G'][orig_ind]
+                        use_for_fit = indv_image_source_data_HST[mask_name]['use_for_fit'][orig_ind]
+                        g_mag = indv_image_source_data_HST[mask_name]['g_mag'][orig_ind]
+                        q_hst = indv_image_source_data_HST[mask_name]['q_hst'][orig_ind]
+                        for label in correlation_names:
+                            data_combined[mask_name]['gaia_'+label].extend(indv_image_source_data_HST[mask_name][label][orig_ind])
+                        hst_times = np.ones(len(gaia_id))*np.array(trans_file_summaries[mask_name]['HST_time'])[orig_ind]
+                        gaia_times = indv_image_source_data_HST[mask_name]['Gaia_time'][orig_ind]
+                        
+                        gaiahub_pm_x = indv_image_source_data_HST[mask_name]['gaiahub_pm_x'][orig_ind]
+                        gaiahub_pm_y = indv_image_source_data_HST[mask_name]['gaiahub_pm_y'][orig_ind]
+                        gaiahub_pm_x_err = indv_image_source_data_HST[mask_name]['gaiahub_pm_x_err'][orig_ind]
+                        gaiahub_pm_y_err = indv_image_source_data_HST[mask_name]['gaiahub_pm_y_err'][orig_ind]
+                        
+                        curr_stationary = indv_image_source_data_HST[mask_name]['stationary'][orig_ind]
+                        
+                        keep = (q_hst > 0)
+                        
+                        data_combined[mask_name]['Gaia_id'].extend(gaia_id[keep])
+                        data_combined[mask_name]['q_hst'].extend(q_hst[keep])
+                        data_combined[mask_name]['X_hst_err'].extend(x_hst_err[keep])
+                        data_combined[mask_name]['Y_hst_err'].extend(y_hst_err[keep])
+                        data_combined[mask_name]['X'].extend(x_orig[keep])
+                        data_combined[mask_name]['Y'].extend(y_orig[keep])
+                        data_combined[mask_name]['X_G'].extend(x_gaia[keep])
+                        data_combined[mask_name]['Y_G'].extend(y_gaia[keep])
+                        data_combined[mask_name]['dX_G'].extend(dx_orig[keep])
+                        data_combined[mask_name]['dY_G'].extend(dy_orig[keep])
+                        data_combined[mask_name]['g_mag'].extend(g_mag[keep])
+                        data_combined[mask_name]['img_num'].extend([j]*len(x_orig[keep]))
+                        data_combined[mask_name]['HST_times'].extend(hst_times[keep])
+                        data_combined[mask_name]['Gaia_times'].extend(gaia_times[keep])
+                        data_combined[mask_name]['stationary'].extend(curr_stationary[keep])
+                        data_combined[mask_name]['gaiahub_pm_x'].extend(gaiahub_pm_x[keep])
+                        data_combined[mask_name]['gaiahub_pm_y'].extend(gaiahub_pm_y[keep])
+                        data_combined[mask_name]['gaiahub_pm_x_err'].extend(gaiahub_pm_x_err[keep])
+                        data_combined[mask_name]['gaiahub_pm_y_err'].extend(gaiahub_pm_y_err[keep])
+                        data_combined[mask_name]['use_for_fit'].extend(use_for_fit[keep])
+                    
                 for param in data_combined[mask_name]:
                     data_combined[mask_name][param] = np.array(data_combined[mask_name][param])
                     
@@ -1078,8 +1174,12 @@ def analyse_images(image_list,field,path,
                 gaia_parallaxes = np.copy(data_combined[mask_name]['gaia_parallax'])[sort_gaia_id_inds] #in mas
                 gaia_parallax_errs = np.copy(data_combined[mask_name]['gaia_parallax_error'])[sort_gaia_id_inds] #in mas
                 
+                only_hst_sources = (gaia_ra_errs > 1000)
+                
                 #ignore the GaiaHub choices of stars to include in fitting (i.e. use all possible stars)
                 use_for_fit[:] = True
+                if fit_count == 0:
+                    use_for_fit[only_hst_sources] = False
                 
                 if fit_count == 0:
                     unique_ids,unique_inds,unique_inv_inds,unique_counts = np.unique(gaia_id,return_index=True,
@@ -1334,7 +1434,7 @@ def analyse_images(image_list,field,path,
                     hst_covs = np.zeros((len(x),2,2))
                     hst_covs[:,0,0] = np.power(hst_pix_sigmas[:,0],2)
                     hst_covs[:,1,1] = np.power(hst_pix_sigmas[:,1],2)
-                    
+
                     hst_inv_covs = np.linalg.inv(hst_covs)
     
                     print('Median HST XY position uncertainty (pixels):',np.round(median_hst_pix_sigmas,3))
@@ -2246,6 +2346,9 @@ def analyse_images(image_list,field,path,
                 sample_cov = np.cov(samples,rowvar=False)
                 best_trans_params = sample_med
                 best_trans_param_covs = sample_cov
+                
+                np.save(f'{outpath}{image_name}_posterior_transformation_6p_matrix_params_medians.npy',sample_med)
+                np.save(f'{outpath}{image_name}_posterior_transformation_6p_matrix_params_covs.npy',sample_cov)
                     
                 ags = samples[:,0::n_param_indv]
                 bgs = samples[:,1::n_param_indv]
@@ -3083,7 +3186,7 @@ def analyse_images(image_list,field,path,
                 #     #prior PMs on the stars that are missing Gaia priors
                 #     force_repeat = True
                 #     pass
-                elif np.all(outliers == all_outliers) or (len(outlier_inds) == 0):
+                elif np.all(outliers == all_outliers):
                     #then no stars (or fewer stars) were removed, so don't repeat the fit
                     print(f'Found no new outliers outside {n_sigma_keep} sigma, so not repeating the fit. Stopped after {fit_count+1} fitting iterations.')
 #                    stop_fitting = True
