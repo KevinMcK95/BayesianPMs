@@ -145,10 +145,10 @@ def gaiahub_BPMs(argv):
 
     parser.add_argument('--fit_all_hst', 
                         action='store_true', 
-                        default=True,
+                        default=False,
                         help = 'Find all HST-identified sources (even those without Gaia matches) and cross-matches between HST images.'+\
                         ' THIS IS A BETA FEATURE! THE CROSS-MATCHING WILL LIKELY BE IMPROVED IN THE FUTURE!'+\
-                        ' Default True, but only used when one or more HST images share additional sources.')
+                        ' Default False, but only used when one or more HST images share additional sources.')
 
     if len(argv)==0:
         parser.print_help(sys.stderr)

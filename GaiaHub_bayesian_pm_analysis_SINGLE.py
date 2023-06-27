@@ -121,10 +121,10 @@ def gaiahub_single_BPMs(argv):
 
     parser.add_argument('--fit_all_hst', 
                         action='store_true', 
-                        default=True,
+                        default=False,
                         help = 'Find all HST-identified sources (even those without Gaia matches) and cross-matches between HST images.'+\
                         ' THIS IS A BETA FEATURE! THE CROSS-MATCHING WILL LIKELY BE IMPROVED IN THE FUTURE!'+\
-                        ' Default True, but only used when one or more HST images share additional sources.')
+                        ' Default False, but only used when one or more HST images share additional sources.')
 
     if len(argv)==0:
         parser.print_help(sys.stderr)
@@ -748,10 +748,11 @@ def analyse_images(image_list,field,path,
                     indv_image_source_data_HST[field][key] = []
                 indv_image_source_data_HST[field][key].append(np.array(curr_image_df[key]))
     all_extra_names = []
-    for image_ind,image_name in enumerate(image_list):
-        extra_names_in_image = indv_image_source_data_HST[field]['Gaia_id'][image_ind]
-        good_vals = (indv_image_source_data_HST[field]['q_hst'][image_ind] > 0)
-        all_extra_names.extend(extra_names_in_image[good_vals])
+    if fit_all_hst:
+        for image_ind,image_name in enumerate(image_list):
+            extra_names_in_image = indv_image_source_data_HST[field]['Gaia_id'][image_ind]
+            good_vals = (indv_image_source_data_HST[field]['q_hst'][image_ind] > 0)
+            all_extra_names.extend(extra_names_in_image[good_vals])
     curr_unique_id,curr_unique_counts = np.unique(all_extra_names,return_counts=True)
     #only use the extra HST sources that are in at least 2 of the images being considered
     appears_mult_names = curr_unique_id[curr_unique_counts > 1]
@@ -1105,8 +1106,6 @@ def analyse_images(image_list,field,path,
                         use_for_fit = indv_image_source_data_HST[mask_name]['use_for_fit'][orig_ind]
                         g_mag = indv_image_source_data_HST[mask_name]['g_mag'][orig_ind]
                         q_hst = indv_image_source_data_HST[mask_name]['q_hst'][orig_ind]
-                        for label in correlation_names:
-                            data_combined[mask_name]['gaia_'+label].extend(indv_image_source_data_HST[mask_name][label][orig_ind])
                         hst_times = np.ones(len(gaia_id))*np.array(trans_file_summaries[mask_name]['HST_time'])[orig_ind]
                         gaia_times = indv_image_source_data_HST[mask_name]['Gaia_time'][orig_ind]
                         
@@ -1140,6 +1139,8 @@ def analyse_images(image_list,field,path,
                         data_combined[mask_name]['gaiahub_pm_x_err'].extend(gaiahub_pm_x_err[keep])
                         data_combined[mask_name]['gaiahub_pm_y_err'].extend(gaiahub_pm_y_err[keep])
                         data_combined[mask_name]['use_for_fit'].extend(use_for_fit[keep])
+                        for label in correlation_names:
+                            data_combined[mask_name]['gaia_'+label].extend(indv_image_source_data_HST[mask_name][label][orig_ind][keep])
                     
                 for param in data_combined[mask_name]:
                     data_combined[mask_name][param] = np.array(data_combined[mask_name][param])
@@ -1371,6 +1372,7 @@ def analyse_images(image_list,field,path,
                 unique_keep = np.zeros(len(unique_ids)).astype(bool)
                 use_inds = np.zeros(len(keep_stars)).astype(bool)
                 unique_missing_prior_PM = missing_prior_PM[unique_inds]
+                unique_only_hst_sources = only_hst_sources[unique_inds]
                 unique_stationary = stationary[unique_inds]
                 unique_not_stationary = not_stationary[unique_inds]
                 unique_star_mapping = {}
@@ -2915,6 +2917,9 @@ def analyse_images(image_list,field,path,
                 ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
                 err_lengths = np.zeros((len(pm_x_samps[0]),2))
                 for star_ind in range(len(pm_x_samps[0])):
+                    if unique_only_hst_sources[star_ind]:
+                        #don't plot these
+                        continue
                     curr_med = posterior_pm_meds[star_ind]      
                     if unique_keep[star_ind]:
                         color = 'C0'
@@ -2933,6 +2938,9 @@ def analyse_images(image_list,field,path,
                         
                 xlim,ylim = plt.xlim(),plt.ylim()
                 for star_ind in range(len(pm_x_samps[0])):
+                    if unique_only_hst_sources[star_ind]:
+                        #don't plot these
+                        continue
                     curr_cov = posterior_pm_covs[star_ind]
                     curr_med = posterior_pm_meds[star_ind]
                     
@@ -3165,7 +3173,9 @@ def analyse_images(image_list,field,path,
                         plt.close('all')
                         # if star_ind > 25:
                         #     break
-                
+                        
+                use_for_fit[:] = True
+
                 outliers = (~use_for_fit) 
                 if np.sum(~((poss_bad_match) | outliers)) > 5:
                     outliers = poss_bad_match | outliers
@@ -3558,7 +3568,7 @@ def analyse_images(image_list,field,path,
                 plt.plot(err2_plot[0],err2_plot[1],color=color,lw=1,alpha=0.7,zorder=zorder-1)
                 
                 if unique_missing_prior_PM[star_ind]:
-                    plt.scatter(curr_med[0],curr_med[1],edgecolor='blue',facecolor='None',alpha=0.7,zorder=1e10,s=200)
+                    plt.scatter(curr_med[0],curr_med[1],edgecolor='blue',facecolor='None',alpha=0.5,zorder=1e10,s=200)
             
             plt.xlabel(r'GaiaHub $\mu_{\mathrm{RA}}$ (mas/yr)')
             plt.ylabel(r'GaiaHub $\mu_{\mathrm{Dec}}$ (mas/yr)')
@@ -3607,8 +3617,10 @@ def analyse_images(image_list,field,path,
                 plt.plot(err1_plot[0],err1_plot[1],color=color,lw=1,alpha=0.7,zorder=zorder-2)
                 plt.plot(err2_plot[0],err2_plot[1],color=color,lw=1,alpha=0.7,zorder=zorder-1)
                 
-                if unique_missing_prior_PM[star_ind]:
-                    plt.scatter(curr_med[0],curr_med[1],edgecolor='blue',facecolor='None',alpha=0.7,zorder=1e10,s=200)
+                if (unique_only_hst_sources[star_ind]):
+                    plt.scatter(curr_med[0],curr_med[1],edgecolor='C1',facecolor='None',alpha=0.5,zorder=1e10,s=200)
+                elif (unique_missing_prior_PM[star_ind]):
+                    plt.scatter(curr_med[0],curr_med[1],edgecolor='blue',facecolor='None',alpha=0.5,zorder=1e10,s=200)
             
             plt.xlabel(r'KM $\mu_{\mathrm{RA}}$ (mas/yr)')
             plt.ylabel(r'KM $\mu_{\mathrm{Dec}}$ (mas/yr)')
@@ -3618,9 +3630,11 @@ def analyse_images(image_list,field,path,
                 plt.ylim(ylim);plt.xlim(xlim)
             
             plot_gaia_err_size = np.where(~unique_missing_prior_PM)[0]
-            
+            plot_gaiahub = np.where(~unique_only_hst_sources)[0]
+
             gmag_order = np.argsort(g_mag[unique_inds])
             keep_gmag_order = np.argsort(g_mag[unique_inds][plot_gaia_err_size])
+            gaiahub_keep_gmag_order = np.argsort(g_mag[unique_inds][plot_gaiahub])
             
             ax = plt.subplot(gs[1, 0:3])
             plt.grid(visible=True, which='major', color='#666666', linestyle='-',alpha=0.3)
@@ -3629,8 +3643,8 @@ def analyse_images(image_list,field,path,
             plt.plot(g_mag[unique_inds][plot_gaia_err_size][keep_gmag_order],
                      gaia_err_size[unique_inds][plot_gaia_err_size][keep_gmag_order],
                      marker='.',ms=10,color='k',label='Gaia',lw=2)
-            plt.plot(g_mag[unique_inds][gmag_order],
-                     gaiahub_pm_err_sizes[unique_inds][gmag_order],
+            plt.plot(g_mag[unique_inds][plot_gaiahub][gaiahub_keep_gmag_order],
+                     gaiahub_pm_err_sizes[unique_inds][plot_gaiahub][gaiahub_keep_gmag_order],
                      marker='.',ms=10,color='r',label='GaiaHub',lw=2)
             plt.plot(g_mag[unique_inds][gmag_order],
                         np.sqrt(np.sum(np.power(err_lengths,2),axis=1))[gmag_order],
@@ -3743,6 +3757,8 @@ def analyse_images(image_list,field,path,
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
             
             for star_ind in range(len(pm_x_samps[0])):
+                if unique_only_hst_sources[star_ind]:
+                    continue
                 curr_med = posterior_offset_meds[star_ind]                
                 color = 'C0'
                 zorder = -1e5
@@ -3753,6 +3769,8 @@ def analyse_images(image_list,field,path,
                     
             xlim,ylim = plt.xlim(),plt.ylim()
             for star_ind in range(len(pm_x_samps[0])):
+                if unique_only_hst_sources[star_ind]:
+                    continue
                 curr_cov = posterior_offset_covs[star_ind]
                 curr_med = posterior_offset_meds[star_ind]
                 
@@ -3779,6 +3797,7 @@ def analyse_images(image_list,field,path,
             plt.axvline(0,c='k',ls='--',lw=0.5)
 #            plt.show()
             
+            keep = np.where(~unique_only_hst_sources)[0]
 #                plt.figure(figsize=(6,6))
 #            ax = plt.gca()
 #            ax.set_aspect('equal')
@@ -3787,10 +3806,10 @@ def analyse_images(image_list,field,path,
             plt.minorticks_on()
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
-            y_vals = posterior_offset_meds[:,0]
-            y_errs = np.sqrt(posterior_offset_covs[:,0,0])
-            x_vals = np.zeros_like(y_vals)
-            x_errs = np.sqrt(gaia_offset_covs[unique_inds,0,0])
+            y_vals = posterior_offset_meds[:,0][keep]
+            y_errs = np.sqrt(posterior_offset_covs[:,0,0])[keep]
+            x_vals = np.zeros_like(y_vals)[keep]
+            x_errs = np.sqrt(gaia_offset_covs[unique_inds,0,0])[keep]
             plt.errorbar(x_vals,y_vals,xerr=x_errs,yerr=y_errs,fmt='o',color='C0',alpha=0.5,ms=1)
             xlim,ylim = plt.xlim(),plt.ylim()
             plt.plot(xlim,xlim,color='k',zorder=1e10,lw=1,ls='--')
@@ -3807,10 +3826,10 @@ def analyse_images(image_list,field,path,
             plt.minorticks_on()
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
-            y_vals = posterior_offset_meds[:,1]
-            y_errs = np.sqrt(posterior_offset_covs[:,1,1])
-            x_vals = np.zeros_like(y_vals)
-            x_errs = np.sqrt(gaia_offset_covs[unique_inds,1,1])
+            y_vals = posterior_offset_meds[:,1][keep]
+            y_errs = np.sqrt(posterior_offset_covs[:,1,1])[keep]
+            x_vals = np.zeros_like(y_vals)[keep]
+            x_errs = np.sqrt(gaia_offset_covs[unique_inds,1,1])[keep]
             plt.errorbar(x_vals,y_vals,xerr=x_errs,yerr=y_errs,fmt='o',color='C0',alpha=0.5,ms=1)
             xlim,ylim = plt.xlim(),plt.ylim()
             plt.plot(xlim,xlim,color='k',zorder=1e10,lw=1,ls='--')
@@ -3821,7 +3840,6 @@ def analyse_images(image_list,field,path,
 
             plt.savefig(f'{outpath}{image_name}_posterior_VS_prior_offsets.png')
             plt.close('all')
-            
             
             #compare posterior offset uncertainties to Gaia 
             gaia_pos_err_sizes = np.sqrt(np.power(gaia_ra_errs,2)+np.power(gaia_dec_errs,2))
@@ -3837,11 +3855,12 @@ def analyse_images(image_list,field,path,
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
             
-            plt.plot(g_mag[unique_inds][gmag_order],
-                     gaia_pos_err_sizes[unique_inds][gmag_order],
+            plt.plot(g_mag[unique_inds][gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
+                     gaia_pos_err_sizes[unique_inds][gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
                      marker='.',ms=10,color='k',label='Gaia',lw=2)
             ylim = plt.ylim()
-            plt.plot(g_mag[unique_inds][gmag_order],posterior_pos_err_sizes[gmag_order],
+            plt.plot(g_mag[unique_inds][gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
+                     posterior_pos_err_sizes[gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
                      marker='.',ms=10,color='C0',label='KM',lw=2)
             # plt.ylim(0,ylim[1])
             plt.ylabel(r'$||\sigma_{\mathrm{RA,Dec}}||$ (mas)')
@@ -3855,8 +3874,8 @@ def analyse_images(image_list,field,path,
             plt.minorticks_on()
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
-            plt.plot(g_mag[unique_inds][gmag_order],
-                     (gaia_pos_err_sizes[unique_inds]/posterior_pos_err_sizes)[gmag_order],
+            plt.plot(g_mag[unique_inds][gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
+                     (gaia_pos_err_sizes[unique_inds]/posterior_pos_err_sizes)[gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
                      marker='.',ms=10,color='C0',label='KM',lw=2)
             plt.xlabel('G (mag)')
             plt.ylabel(r'Position Error Improvement Factor')
@@ -3872,7 +3891,6 @@ def analyse_images(image_list,field,path,
             #plots of the V_RA versus distance for the truth and Gaia Priors and Posterior measures
             #Do the same for V_Dec and V_tangential
             #Look at total trend as well as individual measurements
-            
             
             indv_star_path = f'{path}{field}/Bayesian_PMs/{image_name}/indv_stars/'
             if not os.path.isdir(indv_star_path):
