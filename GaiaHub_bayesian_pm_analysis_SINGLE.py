@@ -60,7 +60,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 #used to decide if previous analyses should automatically be overwritten because of newer version of code 
 last_update_time = (datetime.datetime(2023, 6, 23, 15, 43, 58, 385797)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
 final_file_ext = '_fit_summary.csv'
-final_file_ext = '_posterior_transformation_6p_matrix_params_covs.npy'
+#final_file_ext = '_posterior_transformation_6p_matrix_params_covs.npy'
 
 def gaiahub_single_BPMs(argv):  
     """
