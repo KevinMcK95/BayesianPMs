@@ -10,10 +10,173 @@ import numpy as np
 import os
 import pandas as pd
 from tqdm import tqdm
+from decimal import getcontext,Decimal
+from math import atan2,asin,sqrt,pow
+
+
 #import matplotlib.pyplot as plt
 import process_GaiaHub_outputs as process_GH
 
 correlation_names = process_GH.correlation_names
+
+def n_combs(n,k):
+    #return n choose k combinations
+    return int(round(np.exp(np.sum(np.log(np.arange(n)+1))-np.sum(np.log(np.arange(k)+1))-np.sum(np.log(np.arange(n-k)+1)))))
+
+getcontext().prec = 28
+
+def XY_from_RADec(ra,dec,ra0,dec0,X0,Y0,pixel_scale):
+    '''
+    ra,dec,ra0,dec0 in degrees
+    pixel_scale in mas/pixel
+    X0,Y0 in pixels
+    X,Y in pixels
+    
+    equations come from xym2pm_GH.F, after line 2047
+    '''
+    
+    dec0_rad = dec0*np.pi/180
+    dec_rad = dec*np.pi/180
+    ra0_rad = ra0*np.pi/180
+    ra_rad = ra*np.pi/180
+    
+    cosra = np.cos(ra_rad-ra0_rad)
+    sinra = np.sin(ra_rad-ra0_rad)
+    cosde = np.cos(dec_rad)
+    sinde = np.sin(dec_rad)
+    cosd0 = np.cos(dec0_rad)
+    sind0 = np.sin(dec0_rad)
+    
+    rrrr = sind0*sinde + cosd0*cosde*cosra
+    #offsets in radians
+    dY = (cosd0*sinde-sind0*cosde*cosra)/rrrr
+    dX = cosde*sinra/rrrr
+    
+    x  = cosde*np.cos(ra_rad)
+    y  = cosde*np.sin(ra_rad)
+    z  = sinde
+    xx = cosd0*np.cos(ra0_rad)
+    yy = cosd0*np.sin(ra0_rad)
+    zz = sind0
+    bad_cond = (x*xx + y*yy + z*zz < 0)
+    dY[bad_cond] = np.pi/2
+    dX[bad_cond] = np.pi/2
+            
+    X = X0-dX*180/np.pi*3600*1000/pixel_scale
+    Y = Y0+dY*180/np.pi*3600*1000/pixel_scale
+    
+    return X,Y
+
+
+def RADec_from_XY(X,Y,ra0,dec0,X0,Y0,pixel_scale):
+    '''
+    ra,dec,ra0,dec0 in degrees
+    pixel_scale in mas/pixel
+    X0,Y0 in pixels
+    X,Y in pixels    
+    
+    equations from https://www.researchgate.net/publication/333841450_Astrometry_The_Foundation_for_Observational_Astronomy,
+    though our dY is their Y*-1
+    '''
+    
+    dec0_rad = dec0*np.pi/180
+    ra0_rad = ra0*np.pi/180
+    
+    cosd0 = np.cos(dec0_rad)
+    sind0 = np.sin(dec0_rad)
+    
+#    decimal_cosd0 = Decimal(cosd0)
+#    decimal_sind0 = Decimal(sind0)
+    
+    dX = (X0-X)/(180/np.pi*3600*1000/pixel_scale)
+    dY = (Y-Y0)/(180/np.pi*3600*1000/pixel_scale)
+    
+    ra_rad = np.zeros_like(X)
+    dec_rad = np.zeros_like(Y)
+    
+    atan_args = dX,cosd0-dY*sind0
+    asin_args = (sind0+dY*cosd0)/np.sqrt(1+np.power(dX,2)+np.power(dY,2))
+    
+    for j in range(len(X)):
+#        decimal_dx = Decimal(dX[j])
+#        decimal_dy = Decimal(dY[j])
+#        ra_rad[j] = ra0_rad + atan2(decimal_dx,decimal_cosd0-decimal_dy*decimal_sind0)
+        
+        ra_rad[j] = ra0_rad + atan2(Decimal(atan_args[0][j]),Decimal(atan_args[1][j]))
+        dec_rad[j] = asin(Decimal(asin_args[j]))
+    
+    ra = ra_rad*180/np.pi
+    dec = dec_rad*180/np.pi
+                
+    return ra,dec
+
+def RADec_and_Jac_from_XY(X,Y,ra0,dec0,X0,Y0,pixel_scale):
+    '''
+    ra,dec,ra0,dec0 in degrees
+    pixel_scale in mas/pixel
+    X0,Y0 in pixels
+    X,Y in pixels    
+    
+    equations from https://www.researchgate.net/publication/333841450_Astrometry_The_Foundation_for_Observational_Astronomy,
+    though our dY is their Y*-1
+    '''
+        
+    deg_to_mas = 3600*1000 #mas/deg
+    mas_to_pix = 1/pixel_scale #pix/mas
+    rad_to_deg = 180/np.pi #deg/rad
+    
+    rad_to_mas = rad_to_deg*deg_to_mas
+    rad_to_pix = rad_to_mas*mas_to_pix
+    
+    dec0_rad = dec0/rad_to_deg
+    ra0_rad = ra0/rad_to_deg
+    
+    cosd0 = np.cos(dec0_rad)
+    sind0 = np.sin(dec0_rad)
+    
+    dX = (X0-X)/rad_to_pix
+    dY = (Y-Y0)/rad_to_pix
+    
+    ra_rad = np.zeros_like(X)
+    dec_rad = np.zeros_like(Y)
+    
+    atan_args = dX,cosd0-dY*sind0
+    summed_dx_dy = 1+np.power(dX,2)+np.power(dY,2)
+    sqrt_summed_dx_dy = np.sqrt(summed_dx_dy)
+    asin_args = (sind0+dY*cosd0)/sqrt_summed_dx_dy
+    
+    for j in range(len(X)):
+#        decimal_dx = Decimal(dX[j])
+#        decimal_dy = Decimal(dY[j])
+#        ra_rad[j] = ra0_rad + atan2(decimal_dx,decimal_cosd0-decimal_dy*decimal_sind0)
+        
+        ra_rad[j] = atan2(Decimal(atan_args[0][j]),Decimal(atan_args[1][j]))
+        dec_rad[j] = asin(Decimal(asin_args[j]))
+        
+    ra_rad += ra0_rad
+    ra = ra_rad*rad_to_deg
+    dec = dec_rad*rad_to_deg
+    
+    atan_div = atan_args[0]/atan_args[1]
+    datan = 1/(np.power(atan_div,2)+1)
+    dasin = 1/np.sqrt(1-np.power(asin_args,2))
+    ddeltaX_dX = -1/rad_to_pix
+    ddeltaY_dY = 1/rad_to_pix
+    
+    dra_dX = rad_to_deg*datan*(1/atan_args[1])*ddeltaX_dX
+    dra_dY = rad_to_deg*datan*(-1*atan_div/atan_args[1]*(-1*sind0))*ddeltaY_dY
+    dracosdec_dX = dra_dX*np.cos(dec)*deg_to_mas
+    dracosdec_dY = dra_dY*np.cos(dec)*deg_to_mas
+    ddec_dX = rad_to_mas*dasin*(-1*asin_args/summed_dx_dy)*dX*ddeltaX_dX
+    ddec_dY = rad_to_mas*dasin*(-1*asin_args/summed_dx_dy*dY+cosd0/sqrt_summed_dx_dy)*ddeltaY_dY
+    
+    jac = np.zeros((len(X),2,2))
+    jac[:,0,0] = dracosdec_dX
+    jac[:,0,1] = dracosdec_dY
+    jac[:,1,0] = ddec_dX
+    jac[:,1,1] = ddec_dY
+                
+    return np.array([ra,dec]).T,jac
 
 
 def source_matcher(field,path):
@@ -35,6 +198,7 @@ def source_matcher(field,path):
     
     image_names = np.array(trans_file_df['image_name'].to_list())
     not_in_gaia_sources = {}
+    gaia_trans_params = {}
     for image_ind,image_name in enumerate(tqdm(image_names,total=len(image_names))):
     #    print(f'Looking at all HST-identified sources for {image_name} in field {field}.')
         
@@ -166,7 +330,15 @@ def source_matcher(field,path):
         xymqrd_hst_gaia[:,7] = all_hst_sources['X'][not_in_gaia_inds]
         xymqrd_hst_gaia[:,8] = all_hst_sources['Y'][not_in_gaia_inds]
         
+        #change the Gaia pseudo-pixels in Gaia RA,Dec
+        ra_gaia_new,dec_gaia_new = RADec_from_XY(xymqrd_hst_gaia[:,0],
+                                                 xymqrd_hst_gaia[:,1],
+                                                 ra_gaia_center,dec_gaia_center,x_gaia_center,y_gaia_center,gaia_pixel_scale)
+        xymqrd_hst_gaia[:,4] = ra_gaia_new
+        xymqrd_hst_gaia[:,5] = dec_gaia_new
+        
         not_in_gaia_sources[image_name] = xymqrd_hst_gaia
+        gaia_trans_params[image_name] = np.array([ra_gaia_center,dec_gaia_center,x_gaia_center,y_gaia_center,gaia_pixel_scale])
         
     max_pm = 100 #mas/yr
     first_min_dist_thresh = 100 #mas
@@ -342,7 +514,6 @@ def source_matcher(field,path):
         
     #    break
         
-            
     match_completed_dict = {}
     star_name_dict = {}
     star_rename_dict = {}
@@ -413,6 +584,8 @@ def source_matcher(field,path):
                 star_name_dict[star_name][image_name] = star_ind
                 star_name_dict[star_name][other_image] = best_match_ind
                 
+    max_allowed_pm_size = 300 #mas/yr
+                
     star_properties_dict = {}
     image_new_stars = {}
     for star_name in star_name_dict:
@@ -429,40 +602,89 @@ def source_matcher(field,path):
             ave_properties[image_ind,:-1] = not_in_gaia_sources[image_name][star_ind] #X_G,Y_G,m_hst,q_fit,ra,dec,m_g,X,Y
             ave_properties[image_ind,-1] = curr_dt
             
-        dxs = ave_properties[:,0]-ave_properties[0,0]
-        dys = ave_properties[:,1]-ave_properties[0,1]
-        dts = ave_properties[:,-1]-ave_properties[0,-1]
-        dts[0] = 1
+        #use all pairwise combinations of positions to estimate the PM, which is used to predict a Gaia RA,Dec
+        #which is then turned into an X_G,Y_G for each image
+        curr_n_velo_combs = min(100,n_combs(len(ave_properties),2))
+                
+        poss_gaia_ras = np.zeros((curr_n_velo_combs,2))
+        poss_gaia_ra_errs = np.zeros((curr_n_velo_combs,2))
+        poss_gaia_decs = np.zeros((curr_n_velo_combs,2))
+        poss_gaia_dec_errs = np.zeros((curr_n_velo_combs,2))
+        
+        counter = 0
+        for ind1 in range(len(ave_properties)-1):
+            for ind2 in range(ind1+1,len(ave_properties)):
+                dx = ave_properties[ind2,4]-ave_properties[ind1,4]
+                dy = ave_properties[ind2,5]-ave_properties[ind1,5]
+                dt = ave_properties[ind2,-1]-ave_properties[ind1,-1]
+                diff_err = np.sqrt(np.power(ave_properties[ind2,3],2)+np.power(ave_properties[ind1,3],2))
+                pm_err = diff_err/np.abs(dt)
+                
+                pm_ra = dx/dt
+                pm_dec = dy/dt
+                pm_size_mas = ((pm_ra**2+pm_dec**2)**0.5)*3600*1000
+                
+                if pm_size_mas > max_allowed_pm_size:
+                    pm_scale_fact = max_allowed_pm_size/pm_size_mas
+                else:
+                    pm_scale_fact = 1
+                    
+                pm_ra *= pm_scale_fact
+                pm_dec *= pm_scale_fact
+                pm_err *= pm_scale_fact                
+                
+                curr_gaia_ras = ave_properties[ind1,4]+ave_properties[ind1,-1]*pm_ra,\
+                                ave_properties[ind2,4]+ave_properties[ind2,-1]*pm_ra
+                curr_gaia_ra_errs = np.sqrt(np.power(ave_properties[ind1,3],2)+np.power(pm_err*ave_properties[ind1,-1],2)),\
+                                    np.sqrt(np.power(ave_properties[ind2,3],2)+np.power(pm_err*ave_properties[ind2,-1],2))
+                curr_gaia_decs = ave_properties[ind1,5]+ave_properties[ind1,-1]*pm_dec,\
+                                 ave_properties[ind2,5]+ave_properties[ind2,-1]*pm_dec
+                curr_gaia_dec_errs = np.sqrt(np.power(ave_properties[ind1,3],2)+np.power(pm_err*ave_properties[ind1,-1],2)),\
+                                     np.sqrt(np.power(ave_properties[ind2,3],2)+np.power(pm_err*ave_properties[ind2,-1],2))
+                
+                poss_gaia_ras[counter] = curr_gaia_ras
+                poss_gaia_ra_errs[counter] = curr_gaia_ra_errs
+                poss_gaia_decs[counter] = curr_gaia_decs
+                poss_gaia_dec_errs[counter] = curr_gaia_dec_errs
+                
+                counter += 1
+                
+                if counter >= curr_n_velo_combs:
+                    break
+            if counter >= curr_n_velo_combs:
+                break
             
-        pm_ras = dxs/dts
-        pm_decs = dys/dts
-        pm_weights = np.power(ave_properties[:,3],2)+np.power(ave_properties[0,3],2)
-        if np.sum(pm_weights) == 0:
-            pm_weights[:] = 1
-        pm_weights /= np.sum(pm_weights)
-        ave_pm_ra = np.sum(pm_weights*pm_ras)
-        ave_pm_dec = np.sum(pm_weights*pm_decs)
+        poss_gaia_ra_errs[poss_gaia_ra_errs == 0] = np.inf
+        poss_gaia_dec_errs[poss_gaia_dec_errs == 0] = np.inf
         
-        gaia_xs = ave_properties[:,0]+ave_pm_ra*curr_dt
-        gaia_ys = ave_properties[:,1]+ave_pm_dec*curr_dt
+        poss_gaia_ra_weights = np.power(poss_gaia_ra_errs,-2)
+        poss_gaia_ra_weights[~np.isfinite(poss_gaia_ra_weights)] = 0
+        if np.sum(poss_gaia_ra_weights) == 0:
+            poss_gaia_ra_weights[:] = 1
+        poss_gaia_ra_weights /= np.sum(poss_gaia_ra_weights)
+        poss_gaia_dec_weights = np.power(poss_gaia_dec_errs,-2)
+        poss_gaia_dec_weights[~np.isfinite(poss_gaia_dec_weights)] = 0
+        if np.sum(poss_gaia_dec_weights) == 0:
+            poss_gaia_dec_weights[:] = 1
+        poss_gaia_dec_weights /= np.sum(poss_gaia_dec_weights)
         
-        weights = ave_properties[:,3]
+        best_gaia_ra = np.sum(poss_gaia_ra_weights*poss_gaia_ras)
+        best_gaia_dec = np.sum(poss_gaia_dec_weights*poss_gaia_decs)
+                        
+        errs = np.copy(ave_properties[:,3])
+        errs[errs == 0] = 1000
+        weights = np.power(errs,-2)
         if np.sum(weights) == 0:
             weights[:] = 1
         weights /= np.sum(weights)
         star_properties_dict[star_name] = {}
         star_properties_dict[star_name]['Gaia_id'] = star_name
         star_properties_dict[star_name]['hst_images'] = ' '.join(list(star_name_dict[star_name].keys()))
-        star_properties_dict[star_name]['ra_G'] = np.sum(ave_properties[:,4]*weights)
-        star_properties_dict[star_name]['dec_G'] = np.sum(ave_properties[:,5]*weights)
-        
-    #    star_properties_dict[star_name]['X_G'] = np.sum(ave_properties[:,0]*weights)
-    #    star_properties_dict[star_name]['Y_G'] = np.sum(ave_properties[:,1]*weights)
-        star_properties_dict[star_name]['X_G'] = np.sum(gaia_xs*weights)
-        star_properties_dict[star_name]['Y_G'] = np.sum(gaia_ys*weights)
-        
+        star_properties_dict[star_name]['ra_G'] = best_gaia_ra
+        star_properties_dict[star_name]['dec_G'] = best_gaia_dec
+                
         star_properties_dict[star_name]['g_mag'] = np.sum(ave_properties[:,6]*weights)    
-    
+            
     for image_name in image_new_stars:
         outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
         gaiahub_output_info = {'Gaia_id':[],'x_hst_err':[],'y_hst_err':[],
@@ -475,6 +697,8 @@ def source_matcher(field,path):
                                           }
         for label in correlation_names:
             gaiahub_output_info[label] = []
+            
+        ra_gaia_center,dec_gaia_center,x_gaia_center,y_gaia_center,gaia_pixel_scale = gaia_trans_params[image_name]
             
         star_names = image_new_stars[image_name]
         star_hst_images = []
@@ -491,8 +715,6 @@ def source_matcher(field,path):
         Y_2 = np.zeros(len(star_names))
         for star_ind,star_name in enumerate(star_names):
             star_hst_images.append(star_properties_dict[star_name]['hst_images'])
-    #        X_G[star_ind] = star_properties_dict[star_name]['X_G']
-    #        Y_G[star_ind] = star_properties_dict[star_name]['Y_G']
             ra_G[star_ind] = star_properties_dict[star_name]['ra_G']
             dec_G[star_ind] = star_properties_dict[star_name]['dec_G']
             m_g[star_ind] = star_properties_dict[star_name]['g_mag']
@@ -507,10 +729,16 @@ def source_matcher(field,path):
             X_2[star_ind] = star_properties[0]
             Y_2[star_ind] = star_properties[1]
             
-            X_G[star_ind] = star_properties[0]
-            Y_G[star_ind] = star_properties[1]
+#            X_G[star_ind] = star_properties[0]
+#            Y_G[star_ind] = star_properties[1]
+            
+        X_G,Y_G = XY_from_RADec(ra_G,dec_G,
+                                ra_gaia_center,dec_gaia_center,x_gaia_center,y_gaia_center,gaia_pixel_scale)
+        
         dX_G = X_G-X_2
         dY_G = Y_G-Y_2
+        
+#        print(np.all(np.isfinite(dX_G)),np.all(np.isfinite(dY_G)))
             
         nan_array = np.nan*np.zeros(len(X_G))
         zeros_array = np.zeros(len(X_G))
@@ -565,7 +793,8 @@ if __name__ == '__main__':
     path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
     
     field = 'Fornax_dSph'
-    field = 'COSMOS_field'
+#    field = 'COSMOS_field'
+    field = 'Draco_dSph'
 
     source_matcher(field,path)
 

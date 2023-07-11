@@ -122,6 +122,7 @@ def collect_gaiahub_results(field,
     #get the HST observation times of all possible images in this field
     #hst_image_times = {}
     hst_image_obsids = {}
+    hst_image_filters = {}
     csvpath = f'{path}{field}/HST/'
     for csv_name in os.listdir(csvpath):
         if (field not in csv_name) or ('_data_products.csv' not in csv_name):
@@ -136,15 +137,18 @@ def collect_gaiahub_results(field,
     #    obs_time_ind = np.where(variable_names == 'obs_time')[0][0]-len(variable_names)
         obs_id_ind = np.where(variable_names == 'obs_id')[0][0]
         parent_obs_id_ind = np.where(variable_names == 'parent_obsid')[0][0]
+        filter_ind = np.where(variable_names == 'filters')[0][0]
         
         for j in range(1,len(lines)):
             split_vals = lines[j][:-1].split(',')
             curr_obs_id = split_vals[obs_id_ind]
+            curr_filter = split_vals[filter_ind]
     #        curr_obs_time = split_vals[obs_time_ind]
             curr_parent_obs_id = split_vals[parent_obs_id_ind]
             
             if curr_obs_id not in hst_image_obsids:
                 hst_image_obsids[curr_obs_id] = curr_parent_obs_id
+                hst_image_filters[curr_obs_id] = curr_filter
     #        if curr_obs_id not in hst_image_times:
     #            hst_image_times[curr_obs_id] = curr_obs_time
     
@@ -286,7 +290,8 @@ def collect_gaiahub_results(field,
                                                'rot':[],'pix_scale_ratio':[],'real_img_pix_scale':[],
                                                'mag_zp':[], 
                                                'on_axis_skew':[],'off_axis_skew':[],'rotate_mult_fact':[],
-                                               'orig_rot':[],'orig_pixel_scale':[],'obsid':[],'exptime':[],
+                                               'orig_rot':[],'orig_pixel_scale':[],'x_gaia_center':[],'y_gaia_center':[],
+                                               'obsid':[],'exptime':[],'instrument':[],'detector':[],'filter':[],
                                                'HST_time':[]}
             
 #            trans_file_summaries[mask_name] = {}
@@ -332,6 +337,7 @@ def collect_gaiahub_results(field,
     #     print(trans_file)
         in_position_info = False
         in_trans_info = False
+        in_program_info = False
         for line in lines:
             line = line.strip()
             if len(line) == 0:
@@ -341,7 +347,10 @@ def collect_gaiahub_results(field,
                 q_hst_limit = float(line.split(',')[1].split('<')[1].split(')')[0])
 #            elif 'Delta_Time' in line:
 #                delta_time = float(line.split(':')[1])
+            elif 'PROGRAM BEGINS' in line:
+                in_program_info = True #start region for instrument info
             elif 'MASTER FRAME INFO' in line:
+                in_program_info = False #end region for instrument info
                 in_position_info = True #start region for position of (RA,Dec) of image
             elif 'GAIA INFO' in line:
                 in_position_info = False #end region for position of (RA,Dec) of image
@@ -350,6 +359,11 @@ def collect_gaiahub_results(field,
             elif 'SAVING MAT FILE' in line:
                 in_trans_info = False #end region for transformation parameters
                 break #stop looking through lines
+            elif in_program_info:
+                if 'INSTRUMENT' in line:
+                    instrument = line.split(':')[1].strip()
+                if 'DETECTOR' in line:
+                    detector = line.split(':')[1].strip()
             elif in_position_info:
                 if 'RA_CENTER' in line:
                     ra = float(line.split(':')[1])
@@ -357,6 +371,10 @@ def collect_gaiahub_results(field,
                     dec = float(line.split(':')[1])   
                 elif 'SCALE (mas/pix)' in line:
                     orig_pixel_scale = float(line.split(':')[1])   
+                elif 'X_CENTER' in line:
+                    x_gaia_center = float(line.split(':')[1])   
+                elif 'Y_CENTER' in line:
+                    y_gaia_center = float(line.split(':')[1])   
             elif in_trans_info:
                 if 'STARS FOUND IN COMMON:' in line:
                     n_stars = int(line.split(':')[1])
@@ -602,10 +620,14 @@ def collect_gaiahub_results(field,
         trans_file_summaries[mask_name]['off_axis_skew'].append(off_axis_skew)
         trans_file_summaries[mask_name]['n_stars'].append(n_stars)
         trans_file_summaries[mask_name]['orig_pixel_scale'].append(orig_pixel_scale) #changes based on instrument
+        trans_file_summaries[mask_name]['x_gaia_center'].append(x_gaia_center) #changes based on instrument
+        trans_file_summaries[mask_name]['y_gaia_center'].append(y_gaia_center) #changes based on instrument
         trans_file_summaries[mask_name]['obsid'].append(hst_image_obsids[image_name])
+        trans_file_summaries[mask_name]['filter'].append(hst_image_filters[image_name])
+        trans_file_summaries[mask_name]['detector'].append(detector)
+        trans_file_summaries[mask_name]['instrument'].append(instrument)
         trans_file_summaries[mask_name]['exptime'].append(hst_image_exp_info[image_name][-1])
-        trans_file_summaries[mask_name]['HST_time'].append(hst_image_mjds[image_name])
-        
+        trans_file_summaries[mask_name]['HST_time'].append(hst_image_mjds[image_name])        
     
 #        matrix = np.array([[new_ag,new_bg],[new_cg,new_dg]])
 #        inv_matrix = np.linalg.inv(matrix)
@@ -650,16 +672,19 @@ def collect_gaiahub_results(field,
     print(f'Summarizing GaiaHub output files for {good_count} useful images in field {field}.')
     
     for mask in trans_file_summaries:                    
+        trans_file_df = pd.DataFrame.from_dict(trans_file_summaries[mask])
+        trans_file_df.to_csv(f'{outpath}gaiahub_image_transformation_summaries.csv',index=False)
+
         for image_ind,image_name in enumerate(trans_file_summaries[mask]['image_name']):
             curr_dict = {}
             keys = gaiahub_output_info[mask].keys()
             for key in keys:
                 curr_dict[key] = gaiahub_output_info[mask][key][image_ind]
             curr_df = pd.DataFrame.from_dict(curr_dict)
+            if not os.path.isdir(f'{outpath}/{image_name}/'):
+                os.makedirs(f'{outpath}/{image_name}/')
             curr_df.to_csv(f'{outpath}/{image_name}/{image_name}_gaiahub_source_summaries.csv',index=False)
 
-        trans_file_df = pd.DataFrame.from_dict(trans_file_summaries[mask])
-        trans_file_df.to_csv(f'{outpath}gaiahub_image_transformation_summaries.csv',index=False)
             
 #    for star_name in star_hst_pix_offsets:
 #        for param in star_hst_pix_offsets[star_name]:

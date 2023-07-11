@@ -58,7 +58,8 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "1" # export VECLIB_MAXIMUM_THREADS=4
 os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
 #used to decide if previous analyses should automatically be overwritten because of newer version of code 
-last_update_time = (datetime.datetime(2023, 6, 23, 15, 43, 58, 385797)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+last_update_time = (datetime.datetime(2023, 6, 27, 13, 19, 5, 519092)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+last_update_time = (datetime.datetime(2023, 7, 6, 12, 0, 0, 0)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
 final_file_ext = '_fit_summary.csv'
 #final_file_ext = '_posterior_transformation_6p_matrix_params_covs.npy'
 
@@ -384,12 +385,26 @@ def transform_jacobian(a,b,c,d):
     jac = np.abs(np.linalg.det(jac_mat))
     return jac
 
-ratio_width = 0.01
 rot_width = 1 #degrees
-on_skew_width = 0.01
-off_skew_width = 0.01
+#on_skew_width = 0.01
+#off_skew_width = 0.01
+#ratio_width = 0.01
+
+on_skew_width = 5e-4
+off_skew_width = 5e-4
+ratio_width = 5e-4
+
 w0_width = 10 #Pseudo-Gaia pixels
 z0_width = 10 #Pseudo-Gaia pixels
+
+global_ratio_mean = 0.99453738
+global_on_skew_mean = -1.30849928e-05
+global_off_skew_mean = 1.19039805e-05
+global_on_skew_mean = 0
+global_off_skew_mean = 0
+
+global_ratio_means = {'ACS/WFC':0.99452,
+                      'WFC3/UVIS':0.99414}
 
 def lnpost_vector(params,
                   n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
@@ -401,6 +416,9 @@ def lnpost_vector(params,
                   global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                   unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
                   ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
+                  fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
+                  indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
+                  indv_orig_pixel_scales,reverse_only_hst_inds,
                   seed=101,n_pms=1) -> np.ndarray:
 #    print(params)
 #    np.random.seed(seed)
@@ -462,11 +480,52 @@ def lnpost_vector(params,
     wz0s = np.array([w0s,z0s]).T[img_nums]
     
     xy_trans = np.einsum('nij,nj->ni',matrices,xy-xy0s)+wz0s
-    star_hst_gaia_pos = xy_g-xy_trans
+    
         
     star_hst_gaia_pos_cov = np.einsum('nij,njk->nik',matrices,np.einsum('nij,njk->nik',hst_covs,matrices_T))
     star_ratios = star_ratios[:,None,None]
     star_hst_gaia_pos_inv_cov = np.linalg.inv(star_hst_gaia_pos_cov)    
+    
+    if fit_all_hst:
+        unique_gaia_offset_inv_covs = np.copy(unique_gaia_offset_inv_covs)
+        log_unique_gaia_offset_covs_det = np.copy(log_unique_gaia_offset_covs_det)
+        
+        xy_g[first_hst_only_inds] = xy_trans[first_hst_only_inds]
+        
+        new_radecs,new_jacs = source_match.RADec_and_Jac_from_XY(X=xy_g[first_hst_only_inds,0],
+                                                                 Y=xy_g[first_hst_only_inds,1],
+                                                                 ra0=indv_ra_gaia_centers[first_hst_only_inds],
+                                                                 dec0=indv_dec_gaia_centers[first_hst_only_inds],
+                                                                 X0=indv_x_gaia_centers[first_hst_only_inds],
+                                                                 Y0=indv_y_gaia_centers[first_hst_only_inds],
+                                                                 pixel_scale=indv_orig_pixel_scales[first_hst_only_inds])
+        #use the jacobian to change the HST-uncertainties (in Gaia pixels) to 
+        #uncertainties in racosdec and dec in mas
+        new_gaia_covs = np.einsum('nij,njk->nik',new_jacs,np.einsum('nij,nkj->nik',star_hst_gaia_pos_cov[first_hst_only_inds],new_jacs))
+        
+        #update the unique covs and determinant
+        unique_gaia_offset_inv_covs[unique_only_hst_sources] = np.linalg.inv(new_gaia_covs)
+        log_unique_gaia_offset_covs_det[unique_only_hst_sources] = np.log(np.linalg.det(new_gaia_covs))
+        
+        #get new x_g,y_g based on the new_radecs
+        new_x_g,new_y_g = source_match.XY_from_RADec(ra=new_radecs[reverse_only_hst_inds,0],
+                                                     dec=new_radecs[reverse_only_hst_inds,1],
+                                                     ra0=indv_ra_gaia_centers[only_hst_sources],
+                                                     dec0=indv_dec_gaia_centers[only_hst_sources],
+                                                     X0=indv_x_gaia_centers[only_hst_sources],
+                                                     Y0=indv_y_gaia_centers[only_hst_sources],
+                                                     pixel_scale=indv_orig_pixel_scales[only_hst_sources])
+        xy_g[only_hst_sources,0] = new_x_g
+        xy_g[only_hst_sources,1] = new_y_g
+        
+        replace_array = np.array([[1000**2,0],[0,1000**2]])
+        replace_inv_array = np.linalg.inv(replace_array)
+        
+        star_hst_gaia_pos_cov[first_hst_only_inds] = replace_array
+        star_hst_gaia_pos_inv_cov[first_hst_only_inds] = replace_inv_array
+        pass
+        
+    star_hst_gaia_pos = xy_g-xy_trans
                     
     jac_V_data_inv_jac = np.einsum('nji,njk->nik',proper_offset_jacs,np.einsum('nij,njk->nik',star_hst_gaia_pos_inv_cov,proper_offset_jacs))
     inv_jac_dot_d_ij = np.einsum('nij,nj->ni',proper_offset_jac_invs,star_hst_gaia_pos)
@@ -566,6 +625,8 @@ def lnpost_vector(params,
 #            pm_gauss_draws[:] = single_gauss_draws
     pm_draws = pm_gauss_draws*np.sqrt(eig_vals) #pms in x,y HST
     pm_draws = np.einsum('nij,wnj->wni',eig_vects,pm_draws)+mu_mu_i
+#    if fit_all_hst:
+#        print(pm_draws[0,unique_only_hst_sources])
     
     mu_theta_i = np.einsum('nij,wnj->wni',A_mu_i,pm_draws)-B_mu_i
                 
@@ -649,6 +710,9 @@ def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_i
                         global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                         unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
                         ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
+                  fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
+                  indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
+                  indv_orig_pixel_scales,reverse_only_hst_inds,
                         out_q):
     output = np.zeros((len(walker_inds),len(unique_ids),5+1))
     for count,w_ind in enumerate(walker_inds):
@@ -663,6 +727,9 @@ def lnpost_new_parallel(walker_inds,thread_ind,new_params,nwalkers_sample,step_i
                                       global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                       unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
                                       ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
+                  fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
+                  indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
+                  indv_orig_pixel_scales,reverse_only_hst_inds,
                                       seed=w_ind+(step_ind+1)*(nwalkers_sample+1))
     out_q.put((output,thread_ind))
     return
@@ -723,6 +790,16 @@ def analyse_images(image_list,field,path,
                         
     if len(image_list) == 1:
         fit_all_hst = False
+        
+    '''
+    TODO:
+    Should tweak this approach so that the position of one of the HST-only observations is given
+    as the Gaia measurement (e.g. change gaia_time to the HST image time, use the RA,Dec of the HST source
+    and propagate that coordinate to the X_G,Y_G values in other HST images). Make sure to change the position
+    uncertainties of the HST-image-that-becomes-Gaia to be really large (infinite) so it isn't ``double-counted''
+    in measuring PMs. Might need to have the RA_Gaia,Dec_Gaia position change during fitting because of the 
+    (de-)transformations used to get RA_Gaia,Dec_Gaia from the detransformed X_H,Y_H.
+    '''
         
     #for each of the images, read in the individual source data
     indv_image_source_data_HST = {field:{}}
@@ -947,13 +1024,23 @@ def analyse_images(image_list,field,path,
                 
                 orig_pixel_scales = np.array(trans_file_summaries[mask_name]['orig_pixel_scale'])[keep_im_nums]
                 
+                x_gaia_centers = np.array(trans_file_summaries[mask_name]['x_gaia_center'])[keep_im_nums]
+                y_gaia_centers = np.array(trans_file_summaries[mask_name]['y_gaia_center'])[keep_im_nums]
+                ra_gaia_centers = np.array(trans_file_summaries[mask_name]['ra'])[keep_im_nums]
+                dec_gaia_centers = np.array(trans_file_summaries[mask_name]['dec'])[keep_im_nums]
+#                hst_filters = np.array(trans_file_summaries[mask_name]['filter'])[keep_im_nums]
+                hst_instruments = np.array(trans_file_summaries[mask_name]['instrument'])[keep_im_nums]
+                hst_detectors = np.array(trans_file_summaries[mask_name]['detector'])[keep_im_nums]
+                
                 param_outputs = np.zeros((n_images,len(trans_params)))
                 for ii,param in enumerate(trans_params):
             #         print(param,np.where(~np.isfinite(trans_file_summaries[mask_name][param]))[0])
                     param_outputs[:,ii] = np.array(trans_file_summaries[mask_name][param])[keep_im_nums]
-#                ra_centers = trans_file_summaries[mask_name]['ra'][keep_im_nums]
-#                dec_centers = trans_file_summaries[mask_name]['dec'][keep_im_nums]
+
+                hst_instrument_detector = np.zeros_like(hst_detectors)
                 for image_ind,hst_image in enumerate(hst_image_names):
+                    hst_instrument_detector[image_ind] = f'{hst_instruments[image_ind]}/{hst_detectors[image_ind]}'
+
                     #if there is a previous analysis, use those transformation parameters
                     if hst_image in previous_analysis_results:
                         xo,yo,wo,zo,ag,bg,cg,dg,rot_sign = param_outputs[image_ind]
@@ -1159,6 +1246,10 @@ def analyse_images(image_list,field,path,
                 q_hst = np.array(data_combined[mask_name]['q_hst'])[sort_gaia_id_inds]
                 img_nums = data_combined[mask_name]['img_num'][sort_gaia_id_inds]
                 indv_orig_pixel_scales = orig_pixel_scales[img_nums]
+                indv_x_gaia_centers = x_gaia_centers[img_nums]
+                indv_y_gaia_centers = y_gaia_centers[img_nums]
+                indv_ra_gaia_centers = ra_gaia_centers[img_nums]
+                indv_dec_gaia_centers = dec_gaia_centers[img_nums]
                 
                 hst_time_strings = data_combined[mask_name]['HST_times'][sort_gaia_id_inds]
     #            hst_times = Time(hst_time_strings)
@@ -1182,11 +1273,13 @@ def analyse_images(image_list,field,path,
                 gaia_parallax_errs = np.copy(data_combined[mask_name]['gaia_parallax_error'])[sort_gaia_id_inds] #in mas
                 
                 only_hst_sources = (gaia_ra_errs > 1000)
+                only_hst_source_inds = np.where(only_hst_sources)[0]
                 
                 #ignore the GaiaHub choices of stars to include in fitting (i.e. use all possible stars)
                 use_for_fit[:] = True
                 if fit_count == 0:
                     use_for_fit[only_hst_sources] = False
+                use_for_fit[only_hst_sources] = False
                 
                 if fit_count == 0:
                     unique_ids,unique_inds,unique_inv_inds,unique_counts = np.unique(gaia_id,return_index=True,
@@ -1208,6 +1301,25 @@ def analyse_images(image_list,field,path,
     #                print(new_proper_offset_jacs[0])
     #                print(np.dot(new_proper_offset_jacs[0],proper_offset_jacs[0]))
     #                laksjd;lksd
+    
+                first_hst_only_inds = np.intersect1d(unique_inds,only_hst_source_inds)
+                
+                unique_only_hst_sources = only_hst_sources[unique_inds]
+                if fit_count == 0:
+                    reverse_only_hst_inds = np.zeros(np.sum(only_hst_sources)).astype(int)
+                    unique_hst_only_ids = unique_ids[unique_only_hst_sources]
+                    for j in range(len(reverse_only_hst_inds)):
+                        reverse_only_hst_inds[j] = np.where(gaia_id[only_hst_source_inds[j]] == unique_hst_only_ids)[0][0]  
+                    
+                if fit_all_hst:
+                    #change the Gaia times to be the times of one of the HST only images
+                    chosen_new_gaia_times = hst_times[first_hst_only_inds]
+                    gaia_times[only_hst_source_inds] = chosen_new_gaia_times.jyear[reverse_only_hst_inds]
+                    delta_times = (gaia_times-hst_times).to(u.year).value
+                    
+                    pass
+                
+                    
                 #gaia prior vectors
                 gaia_vectors = np.zeros((len(x),5)) 
                 gaia_vectors[:,0] = 0 #delta RA
@@ -1372,7 +1484,6 @@ def analyse_images(image_list,field,path,
                 unique_keep = np.zeros(len(unique_ids)).astype(bool)
                 use_inds = np.zeros(len(keep_stars)).astype(bool)
                 unique_missing_prior_PM = missing_prior_PM[unique_inds]
-                unique_only_hst_sources = only_hst_sources[unique_inds]
                 unique_stationary = stationary[unique_inds]
                 unique_not_stationary = not_stationary[unique_inds]
                 unique_star_mapping = {}
@@ -1388,14 +1499,28 @@ def analyse_images(image_list,field,path,
                     if np.sum(keep_stars[curr_inds]) == 0:
                         #then use all the images to measure PMs, but don't use for transform fitting
                         use_inds[curr_inds] = True
+                    elif (unique_only_hst_sources[star_ind]) and (np.sum(keep_stars[curr_inds]) == 1):
+                        #add in code so that stars with only HST measurements are never using 
+                        #only one such measurement. It won't help the transformation, and it
+                        #hurts the PM measurement. In this case, don't use the HST-only star
+                        #for transformation fitting, and use all measurements for PMs.
+                        #If there are more than 2 HST images for an HST-only measure star 
+                        #used in the transformation fitting, then just use those images as normal.
+                        use_inds[curr_inds] = True
+                        keep_stars[curr_inds] = False
+                        unique_keep[star_ind] = False
                     else:
                         curr_inds = curr_inds[keep_stars[curr_inds]]
                         use_inds[curr_inds] = keep_stars[curr_inds]
                     unique_star_mapping[star_name] = curr_inds
-                    multiplicity[curr_inds] = np.sum(use_inds[curr_inds])
+                    curr_num_images_used = np.sum(use_inds[curr_inds])
+                    multiplicity[curr_inds] = curr_num_images_used
+                    
+                keep_star_inds = np.where(keep_stars)[0]
+                keep_ids = gaia_id[keep_star_inds]
                 n_stars_unique = len(unique_ids)
                 n_used_stars_unique = np.sum(unique_keep)
-                
+                    
 #                if n_stars_unique == np.sum(unique_missing_prior_PM):
 #                    print(f"SKIPPING fit of image(s) {image_name} in {mask_name} because no sources have Gaia priors. The results will be the same as GaiaHub's output.")
 #                    skip_fitting = True
@@ -1409,7 +1534,7 @@ def analyse_images(image_list,field,path,
     #                continue
     
                 iteration_string = f'   Iteration {fit_count}   '
-                print('\n\n'+f'-'*len(iteration_string))
+                print('\n'+f'-'*len(iteration_string))
                 print(iteration_string)
                 print(f'-'*len(iteration_string))
                 
@@ -1468,7 +1593,7 @@ def analyse_images(image_list,field,path,
                 if fit_count == 0:
                     missing_prior_PM = ~np.isfinite(gaia_err_sizes) #also missing parallax
                 unique_missing_prior_PM = missing_prior_PM[unique_inds]
-                                
+                                                
                 #use the initial parameters and priors on parallaxes to give a better estimate of the 
                 #prior on the stars that don't have gaia parallaxes
                 if fit_count == 0:
@@ -1729,10 +1854,24 @@ def analyse_images(image_list,field,path,
                     on_skew = 0.5*(a-d)
                     off_skew = 0.5*(b+c)
                     
-                    ratio_means[j] = ratio
                     rot_means[j] = rot
-                    on_skew_means[j] = on_skew
-                    off_skew_means[j] = off_skew
+                    if hst_instrument_detector[j] in global_ratio_means:
+                        global_ratio_mean = global_ratio_means[hst_instrument_detector[j]]
+                    else:
+                        global_ratio_mean = ratio
+                    if np.abs(ratio-global_ratio_mean)/ratio_width < 3:
+                        ratio_means[j] = ratio
+                    else:
+                        ratio_means[j] = global_ratio_mean
+                    if np.abs(on_skew-global_on_skew_mean)/on_skew_width < 3:
+                        on_skew_means[j] = on_skew
+                    else:
+                        on_skew_means[j] = global_on_skew_mean
+                    if np.abs(off_skew-global_off_skew_mean)/off_skew_width < 3:
+                        off_skew_means[j] = off_skew
+                    else:
+                        off_skew_means[j] = global_off_skew_mean
+                        
                     w0_means[j] = w0s[j]
                     z0_means[j] = z0s[j]
                 
@@ -1785,6 +1924,7 @@ def analyse_images(image_list,field,path,
                 star_hst_gaia_pos = np.zeros((len(x),2)) #in gaia pixels
                 star_hst_gaia_pos_cov = np.zeros((len(x),2,2)) #in gaia pixels
                 star_ratios = np.zeros(len(x))
+                
                 for j in range(n_images):
                     curr_img = np.where(img_nums == j)[0]
                     curr_x,curr_y = x[curr_img],y[curr_img]
@@ -1806,8 +1946,11 @@ def analyse_images(image_list,field,path,
                     dx_trans = curr_x_g-x_trans
                     dy_trans = curr_y_g-y_trans
     
-                    star_hst_gaia_pos[curr_img,0] = dx_trans
-                    star_hst_gaia_pos[curr_img,1] = dy_trans
+#                    star_hst_gaia_pos[curr_img,0] = dx_trans
+#                    star_hst_gaia_pos[curr_img,1] = dy_trans
+                    star_hst_gaia_pos[curr_img,0] = x_trans
+                    star_hst_gaia_pos[curr_img,1] = y_trans
+                    
     #                dpix_trans = np.sqrt(np.power(dx_trans,2)+np.power(dy_trans,2))
     #                star_ratios[curr_img] = ratio
                     star_ratios[curr_img] = 1
@@ -1847,9 +1990,56 @@ def analyse_images(image_list,field,path,
                     
                     star_hst_gaia_pos_cov[curr_img] = hst_cov_in_gaia
                     
-    #            np.random.seed(100)
-                
                 star_hst_gaia_pos_inv_cov = np.linalg.inv(star_hst_gaia_pos_cov)
+                
+                if fit_all_hst:
+                    x_g[first_hst_only_inds] = star_hst_gaia_pos[first_hst_only_inds,0]
+                    y_g[first_hst_only_inds] = star_hst_gaia_pos[first_hst_only_inds,1]
+                    
+                    new_radecs,new_jacs = source_match.RADec_and_Jac_from_XY(X=x_g[first_hst_only_inds],
+                                                                             Y=y_g[first_hst_only_inds],
+                                                                             ra0=indv_ra_gaia_centers[first_hst_only_inds],
+                                                                             dec0=indv_dec_gaia_centers[first_hst_only_inds],
+                                                                             X0=indv_x_gaia_centers[first_hst_only_inds],
+                                                                             Y0=indv_y_gaia_centers[first_hst_only_inds],
+                                                                             pixel_scale=indv_orig_pixel_scales[first_hst_only_inds])
+                    #use the jacobian to change the HST-uncertainties (in Gaia pixels) to 
+                    #uncertainties in racosdec and dec in mas
+                    new_gaia_covs = np.einsum('nij,njk->nik',new_jacs,np.einsum('nij,nkj->nik',star_hst_gaia_pos_cov[first_hst_only_inds],new_jacs))
+                    
+#                    print('sigma RA comp:',np.median(np.sqrt(star_hst_gaia_pos_cov[only_hst_sources,0,0])),np.median(np.sqrt(star_hst_gaia_pos_cov[~only_hst_sources,0,0])))
+#                    print('sigma Dec comp:',np.median(np.sqrt(star_hst_gaia_pos_cov[only_hst_sources,1,1])),np.median(np.sqrt(star_hst_gaia_pos_cov[~only_hst_sources,1,1])))
+#                    print('sigma RA comp:',np.median(np.sqrt(new_gaia_covs[:,0,0])),np.median(np.sqrt(unique_gaia_offset_covs[~unique_only_hst_sources,0,0])))
+#                    print('sigma Dec comp:',np.median(np.sqrt(new_gaia_covs[:,1,1])),np.median(np.sqrt(unique_gaia_offset_covs[~unique_only_hst_sources,1,1])))
+                    
+                    #update the unique covs and determinant
+                    unique_gaia_offset_covs[unique_only_hst_sources] = new_gaia_covs
+                    unique_gaia_offset_inv_covs[unique_only_hst_sources] = np.linalg.inv(new_gaia_covs)
+                    log_unique_gaia_offset_covs_det[unique_only_hst_sources] = np.log(np.linalg.det(new_gaia_covs))
+                    
+                    #get new x_g,y_g based on the new_radecs
+                    new_x_g,new_y_g = source_match.XY_from_RADec(ra=new_radecs[reverse_only_hst_inds,0],
+                                                                 dec=new_radecs[reverse_only_hst_inds,1],
+                                                                 ra0=indv_ra_gaia_centers[only_hst_sources],
+                                                                 dec0=indv_dec_gaia_centers[only_hst_sources],
+                                                                 X0=indv_x_gaia_centers[only_hst_sources],
+                                                                 Y0=indv_y_gaia_centers[only_hst_sources],
+                                                                 pixel_scale=indv_orig_pixel_scales[only_hst_sources])
+                    x_g[only_hst_sources] = new_x_g
+                    y_g[only_hst_sources] = new_y_g
+                    
+                    replace_array = np.array([[1000**2,0],[0,1000**2]])
+                    replace_inv_array = np.linalg.inv(replace_array)
+                    
+                    star_hst_gaia_pos_cov[first_hst_only_inds] = replace_array
+                    star_hst_gaia_pos_inv_cov[first_hst_only_inds] = replace_inv_array
+                    pass
+                
+                #change to delta pixels
+                star_hst_gaia_pos[:,0] = x_g-star_hst_gaia_pos[:,0]
+                star_hst_gaia_pos[:,1] = y_g-star_hst_gaia_pos[:,1]
+    #            np.random.seed(100)
+
                 jac_V_data_inv_jac = np.einsum('nji,njk->nik',proper_offset_jacs,np.einsum('nij,njk->nik',star_hst_gaia_pos_inv_cov,proper_offset_jacs))
                 inv_jac_dot_d_ij = np.einsum('nij,nj->ni',proper_offset_jac_invs,star_hst_gaia_pos)
                 summed_jac_V_data_inv_jac = np.add.reduceat(jac_V_data_inv_jac*use_inds[:,None,None],unique_inds)
@@ -1932,6 +2122,11 @@ def analyse_images(image_list,field,path,
                 
                 first_guess_pms = mu_mu_i[unique_inv_inds]
                 pm_draws = mu_mu_i
+#                if fit_all_hst:
+##                    print('Gaia times',np.median(gaia_times[only_hst_sources].to(u.year).value),np.median(gaia_times[~only_hst_sources].to(u.year).value))
+#                    print('Delta times',np.median(delta_times[only_hst_sources]),np.median(delta_times[~only_hst_sources]))
+#                    print('mu_ra',np.median(np.sqrt(Sigma_mu_i[unique_only_hst_sources,0,0])),np.median(np.sqrt(Sigma_mu_i[~unique_only_hst_sources,0,0])))
+#                    print('mu_dec',np.median(np.sqrt(Sigma_mu_i[unique_only_hst_sources,1,1])),np.median(np.sqrt(Sigma_mu_i[~unique_only_hst_sources,1,1])))
     
                 mu_theta_i = np.einsum('nij,nj->ni',A_mu_i,pm_draws)-B_mu_i
                 
@@ -2022,6 +2217,7 @@ def analyse_images(image_list,field,path,
                     else:
                         nsteps = 600
                 # nsteps = 600
+#                nsteps = 200
                     
                 burnin = int(0.7*nsteps)
             #    nwalkers,ndim,nsteps = int(len(pos0)*2),len(pos0),100
@@ -2090,6 +2286,9 @@ def analyse_images(image_list,field,path,
                                             global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                             unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
                                             ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
+                  fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
+                  indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
+                  indv_orig_pixel_scales,reverse_only_hst_inds,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                 
                 def lnpost_new(walker_ind) -> np.ndarray:
@@ -2104,6 +2303,9 @@ def analyse_images(image_list,field,path,
                                             global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                             unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
                                             ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
+                  fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
+                  indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
+                  indv_orig_pixel_scales,reverse_only_hst_inds,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                                 
                 for w_ind in range(nwalkers_sample):
@@ -2288,6 +2490,9 @@ def analyse_images(image_list,field,path,
                                     global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                     unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
                                     ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
+                  fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
+                  indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
+                  indv_orig_pixel_scales,reverse_only_hst_inds,
                                     out_q)
                             p = mp.Process(target=lnpost_new_parallel,
                                            args=args)
@@ -2557,8 +2762,10 @@ def analyse_images(image_list,field,path,
                         dx_trans = curr_x_g-x_trans
                         dy_trans = curr_y_g-y_trans
             
-                        star_hst_gaia_pos[curr_img,0] = dx_trans
-                        star_hst_gaia_pos[curr_img,1] = dy_trans
+    #                    star_hst_gaia_pos[curr_img,0] = dx_trans
+    #                    star_hst_gaia_pos[curr_img,1] = dy_trans
+                        star_hst_gaia_pos[curr_img,0] = x_trans
+                        star_hst_gaia_pos[curr_img,1] = y_trans
         #                dpix_trans = np.sqrt(np.power(dx_trans,2)+np.power(dy_trans,2))
     #                    star_ratios[curr_img] = ratio
                         star_ratios[curr_img] = 1
@@ -2579,6 +2786,48 @@ def analyse_images(image_list,field,path,
                     star_hst_gaia_pos_cov = np.einsum('nij,njk->nik',matrices,np.einsum('nij,njk->nik',hst_covs,matrices_T))
                     star_ratios = star_ratios[:,None,None]
                     star_hst_gaia_pos_inv_cov = np.linalg.inv(star_hst_gaia_pos_cov)
+                                        
+                    if fit_all_hst:
+                        x_g[first_hst_only_inds] = star_hst_gaia_pos[first_hst_only_inds,0]
+                        y_g[first_hst_only_inds] = star_hst_gaia_pos[first_hst_only_inds,1]
+                        
+                        new_radecs,new_jacs = source_match.RADec_and_Jac_from_XY(X=x_g[first_hst_only_inds],
+                                                                                 Y=y_g[first_hst_only_inds],
+                                                                                 ra0=indv_ra_gaia_centers[first_hst_only_inds],
+                                                                                 dec0=indv_dec_gaia_centers[first_hst_only_inds],
+                                                                                 X0=indv_x_gaia_centers[first_hst_only_inds],
+                                                                                 Y0=indv_y_gaia_centers[first_hst_only_inds],
+                                                                                 pixel_scale=indv_orig_pixel_scales[first_hst_only_inds])
+                        #use the jacobian to change the HST-uncertainties (in Gaia pixels) to 
+                        #uncertainties in racosdec and dec in mas
+                        new_gaia_covs = np.einsum('nij,njk->nik',new_jacs,np.einsum('nij,nkj->nik',star_hst_gaia_pos_cov[first_hst_only_inds],new_jacs))
+                        
+                        #update the unique covs and determinant
+                        unique_gaia_offset_covs[unique_only_hst_sources] = new_gaia_covs
+                        unique_gaia_offset_inv_covs[unique_only_hst_sources] = np.linalg.inv(new_gaia_covs)
+                        log_unique_gaia_offset_covs_det[unique_only_hst_sources] = np.log(np.linalg.det(new_gaia_covs))
+                        
+                        #get new x_g,y_g based on the new_radecs
+                        new_x_g,new_y_g = source_match.XY_from_RADec(ra=new_radecs[reverse_only_hst_inds,0],
+                                                                     dec=new_radecs[reverse_only_hst_inds,1],
+                                                                     ra0=indv_ra_gaia_centers[only_hst_sources],
+                                                                     dec0=indv_dec_gaia_centers[only_hst_sources],
+                                                                     X0=indv_x_gaia_centers[only_hst_sources],
+                                                                     Y0=indv_y_gaia_centers[only_hst_sources],
+                                                                     pixel_scale=indv_orig_pixel_scales[only_hst_sources])
+                        x_g[only_hst_sources] = new_x_g
+                        y_g[only_hst_sources] = new_y_g
+                        
+                        replace_array = np.array([[1000**2,0],[0,1000**2]])
+                        replace_inv_array = np.linalg.inv(replace_array)
+                        
+                        star_hst_gaia_pos_cov[first_hst_only_inds] = replace_array
+                        star_hst_gaia_pos_inv_cov[first_hst_only_inds] = replace_inv_array
+                        pass
+                        
+                    #change to delta pixels
+                    star_hst_gaia_pos[:,0] = x_g-star_hst_gaia_pos[:,0]
+                    star_hst_gaia_pos[:,1] = y_g-star_hst_gaia_pos[:,1]
                                     
                     jac_V_data_inv_jac = np.einsum('nji,njk->nik',proper_offset_jacs,np.einsum('nij,njk->nik',star_hst_gaia_pos_inv_cov,proper_offset_jacs))
                     inv_jac_dot_d_ij = np.einsum('nij,nj->ni',proper_offset_jac_invs,star_hst_gaia_pos)
@@ -3017,7 +3266,7 @@ def analyse_images(image_list,field,path,
                 plt.plot(xlim,xlim,color='k',zorder=1e10,lw=1,ls='--')
                 plt.xlim(xlim);plt.ylim(ylim)
                 plt.xlabel('$\mu_{\mathrm{RA,Gaia}}$ (mas/yr)')
-                plt.ylabel('$\mu_{\mathrm{RA,KM}}$ (mas/yr)')
+                plt.ylabel('$\mu_{\mathrm{RA,BPPPM}}$ (mas/yr)')
     #            plt.show()
                 
     #            plt.figure(figsize=(6,6))
@@ -3046,7 +3295,7 @@ def analyse_images(image_list,field,path,
                 plt.plot(xlim,xlim,color='k',zorder=1e10,lw=1,ls='--')
                 plt.xlim(xlim);plt.ylim(ylim)
                 plt.xlabel('$\mu_{\mathrm{Dec,Gaia}}$ (mas/yr)')
-                plt.ylabel('$\mu_{\mathrm{Dec,KM}}$ (mas/yr)')
+                plt.ylabel('$\mu_{\mathrm{Dec,BPPPM}}$ (mas/yr)')
     #            plt.tight_layout()
                 plt.savefig(f'{outpath}{image_name}_posterior_VS_prior_PMs_it%02d.png'%(fit_count))
                 plt.close('all')
@@ -3119,6 +3368,8 @@ def analyse_images(image_list,field,path,
                             color = 'C0'
                             zorder = 1e5
                             curr_med = np.median(pm_data_measures[:,ind],axis=0)
+                            if np.any(np.abs(curr_med) > 300):
+                                continue
                             plt.scatter(curr_med[0],curr_med[1],edgecolor=color,facecolor='None',alpha=0.7,zorder=zorder)
                         
                         #plot the Global PM prior
@@ -3135,9 +3386,14 @@ def analyse_images(image_list,field,path,
                             color = 'C0'
                             zorder = 1e5
                             
-                            curr_cov = np.cov(pm_data_measures[:,ind],rowvar=False)
                             curr_med = np.median(pm_data_measures[:,ind],axis=0)
-                            curr_vals,curr_vects = np.linalg.eig(curr_cov)
+                            if np.any(np.abs(curr_med) > 300):
+                                continue
+                            curr_cov = np.cov(pm_data_measures[:,ind],rowvar=False)
+                            try:
+                                curr_vals,curr_vects = np.linalg.eig(curr_cov)
+                            except:
+                                continue
                             curr_vals = np.sqrt(curr_vals)
                             err_vects = np.zeros_like(curr_vects)
                             err_vects[0] = curr_vals[0]*curr_vects[:,0]
@@ -3212,6 +3468,10 @@ def analyse_images(image_list,field,path,
                 
                 print(f'Iteration {fit_count} took {round(end_time-start_time,2)} seconds.')
                 
+                common_outliers = np.intersect1d(outlier_inds,all_outlier_inds)
+                all_possible_outliers = np.union1d(outlier_inds,all_outlier_inds)
+                n_changed = len(common_outliers)-len(all_possible_outliers)
+
                 force_repeat = False
                 if (np.sum(missing_prior_PM) > 0) and (fit_count == 0):
                     #then repeat at least one iteration to have better
@@ -3228,6 +3488,11 @@ def analyse_images(image_list,field,path,
                     print(f'Found no new outliers outside {n_sigma_keep} sigma, so not repeating the fit. Stopped after {fit_count+1} fitting iterations.')
 #                    stop_fitting = True
                     break
+                elif (np.abs(n_changed) < 0.05*len(outliers)) and (fit_count > 1):
+                    #outlier list only changed a few stars in total, so don't repeat because it probably isn't worth it
+                    print(f'Current outlier list shares >95% of its entries with the previous outlier list (difference of {n_changed} measures), so not repeating the fit. Stopped after {fit_count+1} fitting iterations.')
+#                    stop_fitting = True
+                    break
                 elif len(outlier_inds) < len(all_outlier_inds):
                     #common case is that some measures are removed from the outlier list, but
                     #we probably don't need to repeat the fit because it is costly
@@ -3237,11 +3502,12 @@ def analyse_images(image_list,field,path,
                         n_dropped_outliers = len(all_outlier_inds)-len(outlier_inds)
                         #check that the number of removed outliers is small
 #                        if (n_dropped_outliers <= 5) and (n_dropped_outliers/np.sum(keep_stars) < 0.1):
-                        if (n_dropped_outliers/np.sum(keep_stars) < 0.1):
+                        if (n_dropped_outliers/len(keep_stars) < 0.05):
                             print(f'Current outliers are a smaller subset of the previous outliers (dropped {n_dropped_outliers} measures), so not repeating the fit. Stopped after {fit_count+1} fitting iterations.')
 #                            stop_fitting = True
                             break
                     
+                                            
                 fit_count += 1 #increment counter
     #            all_outliers[np.where(~all_outliers)[0][outliers]] = True
     #            keep_stars = ~all_outliers
@@ -3622,8 +3888,8 @@ def analyse_images(image_list,field,path,
                 elif (unique_missing_prior_PM[star_ind]):
                     plt.scatter(curr_med[0],curr_med[1],edgecolor='blue',facecolor='None',alpha=0.5,zorder=1e10,s=200)
             
-            plt.xlabel(r'KM $\mu_{\mathrm{RA}}$ (mas/yr)')
-            plt.ylabel(r'KM $\mu_{\mathrm{Dec}}$ (mas/yr)')
+            plt.xlabel(r'BPPPM $\mu_{\mathrm{RA}}$ (mas/yr)')
+            plt.ylabel(r'BPPPM $\mu_{\mathrm{Dec}}$ (mas/yr)')
             plt.axhline(0,c='k',ls='--',lw=0.5)
             plt.axvline(0,c='k',ls='--',lw=0.5)
             if field not in ['COSMOS_field']:
@@ -3648,7 +3914,7 @@ def analyse_images(image_list,field,path,
                      marker='.',ms=10,color='r',label='GaiaHub',lw=2)
             plt.plot(g_mag[unique_inds][gmag_order],
                         np.sqrt(np.sum(np.power(err_lengths,2),axis=1))[gmag_order],
-                        marker='.',ms=10,color='C0',label='KM',lw=2)
+                        marker='.',ms=10,color='C0',label='BPPPM',lw=2)
             xlim = plt.xlim()
             plt.axvspan(21,xlim[1],color='grey',alpha=0.2,zorder=-1e10)
             plt.xlim(xlim)
@@ -3670,7 +3936,7 @@ def analyse_images(image_list,field,path,
                     marker='.',ms=10,color='r',label='GaiaHub',lw=2)
             plt.plot(g_mag[unique_inds][plot_gaia_err_size][keep_gmag_order],
                     (gaia_err_size[unique_inds]/np.sqrt(np.sum(np.power(err_lengths,2),axis=1)))[plot_gaia_err_size][keep_gmag_order],
-                    marker='.',ms=10,color='C0',label='KM',lw=2)
+                    marker='.',ms=10,color='C0',label='BPPPM',lw=2)
             plt.ylabel(r'PM Error Improvement Factor')
             plt.xlabel('G (mag)')
             ylim = plt.ylim()
@@ -3704,7 +3970,7 @@ def analyse_images(image_list,field,path,
             plt.plot(xlim,xlim,color='k',zorder=1e10,lw=1,ls='--')
             plt.xlim(xlim);plt.ylim(ylim)
             plt.xlabel('$\mathrm{plx}_{\mathrm{Gaia}}$ (mas)')
-            plt.ylabel('$\mathrm{plx}_{\mathrm{KM}}$ (mas)')
+            plt.ylabel('$\mathrm{plx}_{\mathrm{BPPPM}}$ (mas)')
             
             ax = plt.subplot(gs[:,1])    
 #            ax = plt.gca()
@@ -3719,7 +3985,7 @@ def analyse_images(image_list,field,path,
                      marker='.',ms=10,color='k',label='Gaia',lw=2)
             ylim = plt.ylim()
             plt.plot(g_mag[unique_inds][gmag_order],0.5*np.sum(posterior_parallax_errs,axis=1)[gmag_order],
-                     marker='.',ms=10,color='C0',label='KM',lw=2)
+                     marker='.',ms=10,color='C0',label='BPPPM',lw=2)
             # plt.ylim(0,ylim[1])
             plt.ylabel(r'$\sigma_{\mathrm{plx}}$ (mas)')
             plt.xlabel('G (mag)')
@@ -3734,7 +4000,7 @@ def analyse_images(image_list,field,path,
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
             plt.plot(g_mag[unique_inds][plot_gaia_err_size][keep_gmag_order],
                      (gaia_parallax_errs[unique_inds]/(0.5*np.sum(posterior_parallax_errs,axis=1)))[plot_gaia_err_size][keep_gmag_order],
-                     marker='.',ms=10,color='C0',label='KM',lw=2)
+                     marker='.',ms=10,color='C0',label='BPPPM',lw=2)
             plt.xlabel('G (mag)')
             plt.ylabel(r'Parallax Error Improvement Factor')
             plt.axhline(1.0,c='k',ls='--',lw=1)
@@ -3815,7 +4081,7 @@ def analyse_images(image_list,field,path,
             plt.plot(xlim,xlim,color='k',zorder=1e10,lw=1,ls='--')
             plt.xlim(xlim);plt.ylim(ylim)
             plt.xlabel(r'$\Delta\theta_{\mathrm{RA,Gaia}}$ (mas)')
-            plt.ylabel(r'$\Delta\theta_{\mathrm{RA,KM}}$ (mas)')
+            plt.ylabel(r'$\Delta\theta_{\mathrm{RA,BPPPM}}$ (mas)')
 #            plt.show()
             
 #            plt.figure(figsize=(6,6))
@@ -3835,7 +4101,7 @@ def analyse_images(image_list,field,path,
             plt.plot(xlim,xlim,color='k',zorder=1e10,lw=1,ls='--')
             plt.xlim(xlim);plt.ylim(ylim)
             plt.xlabel(r'$\Delta\theta_{\mathrm{Dec,Gaia}}$ (mas)')
-            plt.ylabel(r'$\Delta\theta_{\mathrm{Dec,KM}}$ (mas)')
+            plt.ylabel(r'$\Delta\theta_{\mathrm{Dec,BPPPM}}$ (mas)')
 #            plt.tight_layout()
 
             plt.savefig(f'{outpath}{image_name}_posterior_VS_prior_offsets.png')
@@ -3855,13 +4121,13 @@ def analyse_images(image_list,field,path,
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
             
-            plt.plot(g_mag[unique_inds][gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
-                     gaia_pos_err_sizes[unique_inds][gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
+            plt.plot(g_mag[unique_inds][plot_gaiahub][gaiahub_keep_gmag_order],
+                     gaia_pos_err_sizes[unique_inds][plot_gaiahub][gaiahub_keep_gmag_order],
                      marker='.',ms=10,color='k',label='Gaia',lw=2)
             ylim = plt.ylim()
-            plt.plot(g_mag[unique_inds][gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
-                     posterior_pos_err_sizes[gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
-                     marker='.',ms=10,color='C0',label='KM',lw=2)
+            plt.plot(g_mag[unique_inds][plot_gaiahub][gaiahub_keep_gmag_order],
+                     posterior_pos_err_sizes[plot_gaiahub][gaiahub_keep_gmag_order],
+                     marker='.',ms=10,color='C0',label='BPPPM',lw=2)
             # plt.ylim(0,ylim[1])
             plt.ylabel(r'$||\sigma_{\mathrm{RA,Dec}}||$ (mas)')
             plt.xlabel('G (mag)')
@@ -3874,9 +4140,9 @@ def analyse_images(image_list,field,path,
             plt.minorticks_on()
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
-            plt.plot(g_mag[unique_inds][gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
-                     (gaia_pos_err_sizes[unique_inds]/posterior_pos_err_sizes)[gmag_order][plot_gaiahub][gaiahub_keep_gmag_order],
-                     marker='.',ms=10,color='C0',label='KM',lw=2)
+            plt.plot(g_mag[unique_inds][plot_gaiahub][gaiahub_keep_gmag_order],
+                     (gaia_pos_err_sizes[unique_inds]/posterior_pos_err_sizes)[plot_gaiahub][gaiahub_keep_gmag_order],
+                     marker='.',ms=10,color='C0',label='BPPPM',lw=2)
             plt.xlabel('G (mag)')
             plt.ylabel(r'Position Error Improvement Factor')
             plt.axhline(1.0,c='k',ls='--',lw=1)
@@ -3898,7 +4164,7 @@ def analyse_images(image_list,field,path,
                 
 #            plt.savefig(f'{indv_star_path}{image_name}_{star_name}_posterior_PM_comparison_it%02d.png'%(fit_count),bbox_inches='tight')
 
-            print(f'Plotting comparison of data and prior PMs for each star.')
+            print(f'Plotting final comparison of data and prior PMs for each star.')
             for star_ind,_ in enumerate(tqdm(pm_x_samps[0],total=len(pm_x_samps[0]))):
 #            for star_ind in range(len(pm_x_samps[0])):
                 
@@ -4376,7 +4642,7 @@ def analyse_images(image_list,field,path,
                     c = np.concatenate(c, axis=0)
                     Ns, Nc = len(s), len(c)
                     zz = np.power((stretch_a-1.0)*np.random.rand(Ns)+1,2.0)/stretch_a
-                    prop_factors[S1] = (ndim - 1.0) * np.log(zz)
+                    prop_factors[S1] = (nfit[2] - 1.0) * np.log(zz)
                     rint = np.random.randint(Nc, size=(Ns,))
                     new_params[S1] = c[rint] - (c[rint] - s) * zz[:, None]
                     
@@ -4457,7 +4723,7 @@ def analyse_images(image_list,field,path,
             #plt.plot(np.arange(len(acpt_fracs))[minKeep:],acpt_fracs[minKeep:],lw=1,alpha=1)
             plt.plot(np.arange(len(acpt_fracs)),acpt_fracs,lw=1,alpha=1)
             acc_lim = plt.ylim()
-            plt.axvline(minKeep,c='r',label=f'Burnin ({burnin} steps)')
+            plt.axvline(minKeep,c='r',label=f'Burnin ({new_burnin} steps)')
             plt.axhline(stats_vals[1],label='Median: %.3f'%stats_vals[1],c='k',ls='--')
             plt.axhline(stats_vals[2],label='Mean: %.3f'%stats_vals[2],c='k',ls='-')
             plt.axhline(stats_vals[0],label='Min: %.3f\nMax: %.3f'%(stats_vals[0],stats_vals[-1]),c='grey')

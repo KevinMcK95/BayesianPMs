@@ -199,7 +199,7 @@ def gaiahub_BPMs(argv):
             linked_image_list = temp_list
         
         for entry_ind,entry in enumerate(linked_image_list):
-            print(f'\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
+            print(f'\n\n\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.')
             
             #check if previous analysis exists
             image_name = '_'.join(entry)
@@ -252,7 +252,6 @@ def gaiahub_BPMs(argv):
 #                           plot_indv_star_pms=plot_indv_star_pms,
 #                            n_threads = n_threads)
             gc.collect()
-        
 
     else:
         
@@ -276,77 +275,12 @@ def gaiahub_BPMs(argv):
 if __name__ == '__main__':
     
     testing = False
-#    testing = True
+    testing = True
     
     if not testing:
         gaiahub_BPMs(sys.argv[1:])
     else:
         
-        field = 'COSMOS_field'
-        path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
-        overwrite_previous = True
-        overwrite_previous = False
-        overwrite_GH_summaries = False
-#        overwrite_GH_summaries = True
-        n_fit_max = 3
-        max_stars = 2000
-        max_images = 10
-        redo_without_outliers = True
-        plot_indv_star_pms = True
-        n_threads = n_max_threads
-        
-        individual_fit_only = False
-#        individual_fit_only = True
-        
-        thresh_time = last_update_time
-        
-        linked_image_list = [
-                            ['j8pu6ohyq'],['j8pu6oi1q'],['j8pu6oi4q'],['j8pu6oi8q'],
-                            ['j8pu6ohyq','j8pu6oi1q'],
-                            ['j8pu6ohyq','j8pu6oi1q','j8pu6oi4q'],
-                            ['j8pu6ohyq','j8pu6oi1q','j8pu6oi4q','j8pu6oi8q'],
-#                            ['j8pu79lrq'],['j8pu79m2q'],['j8pu74mqq'],
-#                            ['j8pu79lrq','j8pu79m2q'],
-#                            ['j8pu79lrq','j8pu79m2q','j8pu74mqq'],
-                            ]
-        
-        for entry_ind,entry in enumerate(linked_image_list):
-            print(f'\n\n\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
-            
-            #check if previous analysis exists
-            image_name = '_'.join(entry)
-            outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
-                                
-            final_file = f'{outpath}{image_name}{final_file_ext}'
-            if os.path.isfile(final_file):
-                file_time = os.path.getmtime(final_file)
-                if (file_time > thresh_time) and (not overwrite_previous):
-                    print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
-                    continue
-            
-            entry_list = ' '.join(entry)
-            overwrite_previous_string = ''
-            if overwrite_previous:
-                overwrite_previous_string = '--overwrite '
-            overwrite_GH_string = ''
-            if overwrite_GH_summaries:
-                overwrite_GH_string = '--overwrite_GH '
-            repeat_string = ''
-            if redo_without_outliers:
-                repeat_string = '--repeat_first_fit '
-            plot_string = ''
-            if plot_indv_star_pms:
-                plot_string = '--plot_indv_star_pms '
-                
-            #use os.system call so that each image set analysis is separate 
-            #to prevent a creep of memory leak (probably from numpy) that 
-            #uses up all the RAM and slows down the calculations significantly
-            os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
-                      f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
-                      f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}")
-        
-        
-        asdfasdfasdf
         
         fields = [
         '47Tuc',
@@ -373,18 +307,46 @@ if __name__ == '__main__':
         ]
         
         fields = [
+        'COSMOS_field',
         'Fornax_dSph',
         'Sculptor_dSph',
         'Sextans_dSph',
         'Draco_dSph',
+        'E3',
+        'Arp2',
+        'DDO_216',
+        'IC_10',
+        'Leo_I',
+        'NGC_205',
+        'Pal1',
+        'Pal4',
+        'Pal13',
+        'Pal15',
+        'M31',
+        'Pal2',
+        'Terzan8',
         '47Tuc',
+        'NGC2419',
         ]
+        
+#        fields = [
+#        'Pal4',
+#        'Pal13',
+#        'Pal15',
+#        'M31',
+#        'Pal2',
+#        'Terzan8',
+#        '47Tuc',
+#        'NGC2419',
+#        ]                
         
         path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
         overwrite_previous = True
+        overwrite_previous = False
         overwrite_GH_summaries = False
         overwrite_GH_summaries = True
         n_fit_max = 3
+        n_fit_max = 5
         max_stars = 2000
         max_images = 10
         redo_without_outliers = True
@@ -394,12 +356,26 @@ if __name__ == '__main__':
         individual_fit_only = False
         individual_fit_only = True
         
+        fit_all_hst = False
+        fit_population_pms = False
+        
         #probably want to figure out how to ask the user for a thresh_time, but for now, it is the last time I changed the main code
         thresh_time = last_update_time
         
         image_names = 'y'
         
         for field in fields:
+#            process_GH.collect_gaiahub_results(field,path=path,overwrite=True)
+#            continue
+            
+            if field in ['COSMOS_field']:
+                fit_population_pms = False
+                overwrite_GH_summaries = False
+            else:
+                fit_population_pms = True
+                overwrite_GH_summaries = False
+            overwrite_GH_summaries = False
+            
             linked_image_list = BPM.link_images(field,path,
                                             overwrite_previous=overwrite_previous,
                                             overwrite_GH_summaries=overwrite_GH_summaries,
@@ -414,6 +390,9 @@ if __name__ == '__main__':
             
             for entry_ind,entry in enumerate(linked_image_list):
                 print(f'\n\n\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
+                
+#                if entry_ind > 0:
+#                    overwrite_GH_summaries = False
                 
                 #check if previous analysis exists
                 image_name = '_'.join(entry)
@@ -439,14 +418,18 @@ if __name__ == '__main__':
                 plot_string = ''
                 if plot_indv_star_pms:
                     plot_string = '--plot_indv_star_pms '
+                pop_fit_string = ''
+                if fit_population_pms:
+                    pop_fit_string = '--fit_population_pms '
+                fit_all_hst_string = ''
+                if fit_all_hst:
+                    fit_all_hst_string = '--fit_all_hst '
                     
                 #use os.system call so that each image set analysis is separate 
                 #to prevent a creep of memory leak (probably from numpy) that 
                 #uses up all the RAM and slows down the calculations significantly
                 os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
                           f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
-                          f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}")
+                          f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}{pop_fit_string}{fit_all_hst_string}")
    
-    
-
-
+        print(f'\n\nDone with field {field}\n\n\n')
