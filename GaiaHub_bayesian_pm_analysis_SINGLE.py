@@ -59,7 +59,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
 #used to decide if previous analyses should automatically be overwritten because of newer version of code 
 last_update_time = (datetime.datetime(2023, 6, 27, 13, 19, 5, 519092)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
-last_update_time = (datetime.datetime(2023, 7, 6, 12, 0, 0, 0)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+#last_update_time = (datetime.datetime(2023, 7, 6, 12, 0, 0, 0)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
 final_file_ext = '_fit_summary.csv'
 #final_file_ext = '_posterior_transformation_6p_matrix_params_covs.npy'
 
@@ -771,7 +771,17 @@ def analyse_images(image_list,field,path,
     image_list = image_list[time_sort]
     image_mjds = image_mjds[time_sort]
     
-    new_df = trans_file_df.loc[np.where(keep_im_names)[0]]
+    keep_im_name_inds = np.where(keep_im_names)[0][time_sort]
+    
+    if len(time_sort) > max_images:
+        keep_inds = np.arange(0,len(time_sort),max(1,int(len(time_sort)/max_images)))
+        keep_inds = keep_inds[:max_images]
+        if len(keep_inds) > 1:
+            keep_inds[-1] = -1
+        keep_im_name_inds = keep_im_name_inds[keep_inds]
+    
+    
+    new_df = trans_file_df.loc[keep_im_name_inds]
     image_list = new_df['image_name'].to_numpy()
     
     trans_file_summaries = {field:new_df}
@@ -992,6 +1002,7 @@ def analyse_images(image_list,field,path,
                             
             fit_count = 0 #iteration of the number of fits performed
             total_fit_start = time.time()
+            bad_posterior = False
             
             if len(keep_im_nums) == 1:
                 #only fit the too-faint, no-Gaia-info HST sources if using multiple HST images
@@ -1318,7 +1329,6 @@ def analyse_images(image_list,field,path,
                     delta_times = (gaia_times-hst_times).to(u.year).value
                     
                     pass
-                
                     
                 #gaia prior vectors
                 gaia_vectors = np.zeros((len(x),5)) 
@@ -1532,6 +1542,9 @@ def analyse_images(image_list,field,path,
     #            if (np.sum(unique_counts > 1) < 5) and (field in ['COSMOS_field']):
     #                print(f'\nSKIPPING {hst_image_names} because of too few matching stars')
     #                continue
+    
+                if (n_images > 1) and (n_stars_unique == len(gaia_id)):
+                    print(f"SKIPPING fit of image(s) {image_name} in {mask_name} because no sources are shared between HST images. The results will be the same as running each image alone (and much slower).")
     
                 iteration_string = f'   Iteration {fit_count}   '
                 print('\n'+f'-'*len(iteration_string))
@@ -1814,13 +1827,48 @@ def analyse_images(image_list,field,path,
                 n_param_shared = 0
                 n_param_indv = 6      
                 
+                gaia_pms = np.copy(gaia_vectors[:,2:4])
+                
                 if fit_count == 0:
                     best_pm_parallax_offsets = np.zeros(len(x)*5)
                     #resort so that it goes rot,ratio,w0,z0,on_skew,off_skew
                     best_trans_params = np.zeros(n_images*n_param_indv)
                     for j in range(n_images):
                         x0,y0,w0,z0,ag,bg,cd,dg,rot_sign = param_outputs[j]
-                        best_trans_params[j*n_param_indv:(j+1)*n_param_indv] = ag,bg,w0,z0,cd,dg
+                        
+                        #adjust the w0,z0 values if necessary, to account for 
+                        #bulk motion that GaiaHub removed in transformation fitting
+                        curr_img = np.where(img_nums == j)[0]
+                        curr_x,curr_y = x[curr_img],y[curr_img]
+                        curr_x_g,curr_y_g = x_g[curr_img],y_g[curr_img]
+                        
+                        x0,y0 = param_outputs[j,:2]
+                        a,b,c,d = ag,bg,cg,dg                       
+                        
+                        x_trans = a*(curr_x-x0)+b*(curr_y-y0)+w0
+                        y_trans = c*(curr_x-x0)+d*(curr_y-y0)+z0
+        
+                        dx_trans = curr_x_g-x_trans
+                        dy_trans = curr_y_g-y_trans
+                        star_hst_gaia_pos = np.array([dx_trans,dy_trans]).T
+        
+    #                    star_hst_gaia_pos[curr_img,0] = dx_trans
+    #                    star_hst_gaia_pos[curr_img,1] = dy_trans
+                        
+                        data_diff_vals = star_hst_gaia_pos-np.einsum('nij,nj->ni',proper_offset_jacs[curr_img]/indv_orig_pixel_scales[curr_img,None,None],
+                                                                                  delta_times[curr_img,None]*gaia_pms[curr_img]\
+                                                                                  +gaia_parallaxes[curr_img,None]*parallax_offset_vector[curr_img])
+                        
+                        if n_images == 1:
+                            if np.sum(keep_stars) > 3:
+                                w0_offset,z0_offset = np.nanmedian(data_diff_vals[keep_stars],axis=0)
+                            else:
+                                w0_offset,z0_offset = np.nanmedian(data_diff_vals,axis=0)
+                        else:
+                            w0_offset,z0_offset = 0,0
+                                                
+                        best_trans_params[j*n_param_indv:(j+1)*n_param_indv] = ag,bg,w0+w0_offset,z0+z0_offset,cd,dg
+                        
                     for star_ind in np.where(missing_prior_PM)[0]:
                         star_name = gaia_id[star_ind]
                         if star_name in previous_pm_results['average']:
@@ -2035,10 +2083,22 @@ def analyse_images(image_list,field,path,
                     star_hst_gaia_pos_inv_cov[first_hst_only_inds] = replace_inv_array
                     pass
                 
+
                 #change to delta pixels
                 star_hst_gaia_pos[:,0] = x_g-star_hst_gaia_pos[:,0]
                 star_hst_gaia_pos[:,1] = y_g-star_hst_gaia_pos[:,1]
     #            np.random.seed(100)
+    
+#                print(a,b,c,d)
+#                print(x0,y0)
+#                print(w0,z0)
+#                print(np.median(x),np.std(x))
+#                print(np.median(y),np.std(y))
+#                print(np.median(x_g),np.std(x_g))
+#                print(np.median(y_g),np.std(y_g))
+#                print(np.median(star_hst_gaia_pos[:,0]),np.std(star_hst_gaia_pos[:,0]))
+#                print(np.median(star_hst_gaia_pos[:,1]),np.std(star_hst_gaia_pos[:,1]))
+#                asdfasdfasdf
 
                 jac_V_data_inv_jac = np.einsum('nji,njk->nik',proper_offset_jacs,np.einsum('nij,njk->nik',star_hst_gaia_pos_inv_cov,proper_offset_jacs))
                 inv_jac_dot_d_ij = np.einsum('nij,nj->ni',proper_offset_jac_invs,star_hst_gaia_pos)
@@ -2121,6 +2181,7 @@ def analyse_images(image_list,field,path,
                 mu_mu_i = parallax_draws[:,None]*C_plx_mu_i-D_plx_mu_i
                 
                 first_guess_pms = mu_mu_i[unique_inv_inds]
+                
                 pm_draws = mu_mu_i
 #                if fit_all_hst:
 ##                    print('Gaia times',np.median(gaia_times[only_hst_sources].to(u.year).value),np.median(gaia_times[~only_hst_sources].to(u.year).value))
@@ -2216,63 +2277,17 @@ def analyse_images(image_list,field,path,
                             nsteps = 800
                     else:
                         nsteps = 600
+                if bad_posterior:
+                    nsteps *= 2
                 # nsteps = 600
 #                nsteps = 200
-                    
-                burnin = int(0.7*nsteps)
-            #    nwalkers,ndim,nsteps = int(len(pos0)*2),len(pos0),100
-    
-            #     pos = pos0*(1+1e-3*np.random.randn(nwalkers*ndim).reshape((nwalkers,ndim)))
-    #            pos = pos0+np.random.randn(nwalkers*ndim).reshape((nwalkers,ndim))*pos0_widths
-                if fit_count == 0:
-                    #start using the pos0_widths to define the covariance matrix
-                    best_trans_param_covs = np.diag(np.power(pos0_widths,2))
-                    for j,hst_image in enumerate(hst_image_names):
-                        #if there are previous analysis results, use those covariances instead
-                        if hst_image in previous_analysis_results:
-                            best_trans_param_covs[j*n_param_indv:(j+1)*n_param_indv,j*n_param_indv:(j+1)*n_param_indv] = previous_analysis_results[hst_image][1]
-                    best_trans_param_covs *= (0.5/0.9)**2 #make smaller for first iteration
-                samp_mult = 1e5
-                scaled_pos0 = pos0*walker_mults*samp_mult
-                scaled_cov = (0.9**2)*best_trans_param_covs
-                scaled_cov *= samp_mult*walker_mults[:,None]
-                scaled_cov *= samp_mult*walker_mults[None,:]
-                pos = stats.multivariate_normal(mean=scaled_pos0,cov=scaled_cov,allow_singular=True).rvs(nwalkers_sample)
-                pos += np.random.randn(nwalkers_sample,ndim)*np.sqrt(np.diag(scaled_cov))*0.01 #to fight singular matrices
-                pos /= walker_mults[None,:]*samp_mult
                 
-#                unique_gaia_vectors = gaia_vectors[unique_inds]
-#                unique_gaia_vector_inv_covs = gaia_vector_inv_covs[unique_inds]
-#                unique_gaia_vector_covs = gaia_vector_covs[unique_inds]
-#                unique_det_gaia_vector_covs = np.linalg.det(unique_gaia_vector_covs)
-#                unique_gaia_vector_inv_covs_dot_vectors = gaia_vector_inv_covs_dot_vectors[unique_inds]
-                
+                step_ind = -1 #for the first call
                 x0s = param_outputs[:,0]
                 y0s = param_outputs[:,1]
                 xy0s = np.array([x0s,y0s]).T[img_nums]
                 xy = np.array([x,y]).T
                 xy_g = np.array([x_g,y_g]).T
-                
-                print()
-                print('MCMC Fitting of transformation parameters, proper motions, and parallaxes:')
-            
-        #         with Pool(n_threads) as pool:
-        # #             sampler = emcee.EnsembleSampler(nwalkers, ndim, lnpost, pool = pool)
-        # #             sampler = emcee.EnsembleSampler(nwalkers, ndim, lnpost_MAP, pool = pool)
-        #             sampler = emcee.EnsembleSampler(nwalkers, ndim, lnpost_integrated, pool = pool)
-        #             for j, result in enumerate(tqdm(sampler.sample(pos, iterations=nsteps),total=nsteps,smoothing=0.1)):
-        #                 pass
-                    
-                samplerChain = np.zeros(((nwalkers,nsteps,ndim)))
-                step_inds = np.arange(nsteps).astype(int)
-                walker_inds = np.arange(nwalkers_sample).astype(int)
-                
-                lnposts = np.zeros((nwalkers,nsteps))
-                accept_fracs = np.zeros(nsteps)
-                pos_lnpost = np.zeros((nwalkers_sample))
-                previous_params = pos
-                
-                step_ind = -1 #for the first call
                                                 
                 def lnpost_previous(walker_ind) -> np.ndarray:
                     params = previous_params[walker_ind]
@@ -2307,7 +2322,127 @@ def analyse_images(image_list,field,path,
                   indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
                   indv_orig_pixel_scales,reverse_only_hst_inds,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
+                    
+                if (fit_count == 0):
+                    print('Getting better first guess parameters.')
+                    better_guess_time = time.time()
+                    n_repeat_test = 20
+                    
+                    previous_best_params = np.copy(recent_trans_params)
+                    for j in range(n_repeat_test):
+                        for param_ind in range(len(pos0)):
+                            if ('W0' in dimLabels[param_ind]) or ('Z0' in dimLabels[param_ind]):
+                                curr_width = 10
+                            else:
+                                curr_width = 1e-4
+                            offsets = np.linspace(-1,1,201)*curr_width/min(10,2**j)
+#                            print(j,dimLabels[param_ind],recent_trans_params[param_ind],np.diff(offsets)[0])
+                            test_pos = np.zeros((len(offsets),ndim))
+                            test_pos[:] = np.copy(recent_trans_params)
+                            test_pos[:,param_ind] += offsets
+                            previous_params = test_pos
+                            test_lnposts = np.zeros(len(offsets))
+                            
+                            for offset_ind in range(len(previous_params)):
+                                vals = lnpost_previous(offset_ind)
+                                test_lnposts[offset_ind] = vals[0,0]
                                 
+#                            test_inds = np.arange(len(offsets)).astype(int)
+#                            
+#                            out_q = mp.Queue()
+#                            chunksize = int(math.ceil(len(test_inds) / float(n_threads)))
+#                            procs = []
+#                                                
+#                            print(chunksize,test_inds.shape,test_pos.shape)
+#                            for thread_ind in range(n_threads):
+#                                args = (test_inds[chunksize * thread_ind:chunksize * (thread_ind + 1)],thread_ind,
+#                                        test_pos,nwalkers_sample,step_ind,
+#                                        n_param_indv,x,x0s,ags,bgs,cgs,dgs,img_nums,xy,xy0s,xy_g,hst_covs,
+#                                        proper_offset_jacs,proper_offset_jac_invs,unique_gaia_offset_inv_covs,use_inds,unique_inds,
+#                                        parallax_offset_vector,delta_times,unique_inv_inds,delta_time_identities,global_pm_inv_cov,
+#                                        unique_gaia_pm_inv_covs,unique_V_theta_i_inv_dot_theta_i,unique_V_mu_i_inv_dot_mu_i,
+#                                        V_mu_global_inv_dot_mu_global,unique_gaia_offsets,unique_gaia_pms,global_pm_mean,
+#                                        unique_gaia_parallax_ivars,global_parallax_ivar,unique_ids,unique_gaia_parallaxes,
+#                                        global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
+#                                        unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
+#                                        ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
+#                                          fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
+#                                          indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
+#                                          indv_orig_pixel_scales,reverse_only_hst_inds,
+#                                        out_q)
+#                                p = mp.Process(target=lnpost_new_parallel,
+#                                               args=args)
+#                                procs.append(p)
+#                                p.start()
+#                            
+#                                new_vals = np.zeros((len(test_inds),len(unique_ids),5+1))
+#                                for thread_ind in range(n_threads):
+#                                    vals,curr_thread = out_q.get()
+#                                    new_vals[chunksize * curr_thread:chunksize * (curr_thread + 1)] = vals
+#                            
+#                                for p in procs:
+#                                    p.join()
+#                                                                                                            
+#                            new_vals = np.array(new_vals)
+#                            test_lnposts = new_vals[:,0,0]
+                                
+                            best_ind = np.argmax(test_lnposts)
+                            recent_trans_params[param_ind] = test_pos[best_ind,param_ind]
+#                            print(j,dimLabels[param_ind],recent_trans_params[param_ind],recent_trans_params[param_ind]-previous_best_params[param_ind])
+                        if (j > 1) and np.all(np.abs(recent_trans_params-previous_best_params) < 1e-10):
+                            #check to see if it has changed, and stop if it hasn't
+                            break
+                        previous_best_params = np.copy(recent_trans_params)
+                    print('Done. Took %d iterations and %.2f seconds.'%(j+1,time.time()-better_guess_time))
+                    
+                pos0 = np.copy(recent_trans_params)
+                            
+            #    nwalkers,ndim,nsteps = int(len(pos0)*2),len(pos0),100
+    
+            #     pos = pos0*(1+1e-3*np.random.randn(nwalkers*ndim).reshape((nwalkers,ndim)))
+    #            pos = pos0+np.random.randn(nwalkers*ndim).reshape((nwalkers,ndim))*pos0_widths
+                if fit_count == 0:
+                    #start using the pos0_widths to define the covariance matrix
+                    best_trans_param_covs = np.diag(np.power(pos0_widths,2))
+                    for j,hst_image in enumerate(hst_image_names):
+                        #if there are previous analysis results, use those covariances instead
+                        if hst_image in previous_analysis_results:
+                            best_trans_param_covs[j*n_param_indv:(j+1)*n_param_indv,j*n_param_indv:(j+1)*n_param_indv] = previous_analysis_results[hst_image][1]
+                    best_trans_param_covs *= (0.5/0.9)**2 #make smaller for first iteration
+                samp_mult = 1e5
+                scaled_pos0 = pos0*walker_mults*samp_mult
+                scaled_cov = (0.9**2)*best_trans_param_covs
+                scaled_cov *= samp_mult*walker_mults[:,None]
+                scaled_cov *= samp_mult*walker_mults[None,:]
+                pos = stats.multivariate_normal(mean=scaled_pos0,cov=scaled_cov,allow_singular=True).rvs(nwalkers_sample)
+                pos += np.random.randn(nwalkers_sample,ndim)*np.sqrt(np.diag(scaled_cov))*0.01 #to fight singular matrices
+                pos /= walker_mults[None,:]*samp_mult
+                
+#                unique_gaia_vectors = gaia_vectors[unique_inds]
+#                unique_gaia_vector_inv_covs = gaia_vector_inv_covs[unique_inds]
+#                unique_gaia_vector_covs = gaia_vector_covs[unique_inds]
+#                unique_det_gaia_vector_covs = np.linalg.det(unique_gaia_vector_covs)
+#                unique_gaia_vector_inv_covs_dot_vectors = gaia_vector_inv_covs_dot_vectors[unique_inds]
+                                
+                print()
+                print('MCMC Fitting of transformation parameters, proper motions, and parallaxes:')
+            
+        #         with Pool(n_threads) as pool:
+        # #             sampler = emcee.EnsembleSampler(nwalkers, ndim, lnpost, pool = pool)
+        # #             sampler = emcee.EnsembleSampler(nwalkers, ndim, lnpost_MAP, pool = pool)
+        #             sampler = emcee.EnsembleSampler(nwalkers, ndim, lnpost_integrated, pool = pool)
+        #             for j, result in enumerate(tqdm(sampler.sample(pos, iterations=nsteps),total=nsteps,smoothing=0.1)):
+        #                 pass
+                    
+                samplerChain = np.zeros(((nwalkers,nsteps,ndim)))
+                step_inds = np.arange(nsteps).astype(int)
+                walker_inds = np.arange(nwalkers_sample).astype(int)
+                
+                lnposts = np.zeros((nwalkers,nsteps))
+                accept_fracs = np.zeros(nsteps)
+                pos_lnpost = np.zeros((nwalkers_sample))
+                previous_params = pos
+                                                
                 for w_ind in range(nwalkers_sample):
                     vals = lnpost_previous(w_ind)
                     pos_lnpost[w_ind] = vals[0,0]
@@ -2335,6 +2470,8 @@ def analyse_images(image_list,field,path,
                 stretch_a_vals = np.zeros(nsteps)
                 update_stretch_size = 50 #update stretch move every this many steps
                 update_mvn_size = 10
+                
+                bad_posterior = False
                 
                 for step_ind,_ in enumerate(tqdm(step_inds,total=nsteps)):                
                     np.random.seed(step_ind)
@@ -2490,9 +2627,9 @@ def analyse_images(image_list,field,path,
                                     global_parallax_mean,log_unique_gaia_pm_covs_det,log_global_pm_cov_det,
                                     unique_gaia_parallax_vars,log_unique_gaia_offset_covs_det,unique_keep,
                                     ratio_means,rot_means,on_skew_means,off_skew_means,w0_means,z0_means,
-                  fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
-                  indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
-                  indv_orig_pixel_scales,reverse_only_hst_inds,
+                                      fit_all_hst,unique_only_hst_sources,only_hst_sources,first_hst_only_inds,
+                                      indv_ra_gaia_centers,indv_dec_gaia_centers,indv_x_gaia_centers,indv_y_gaia_centers,
+                                      indv_orig_pixel_scales,reverse_only_hst_inds,
                                     out_q)
                             p = mp.Process(target=lnpost_new_parallel,
                                            args=args)
@@ -2556,6 +2693,28 @@ def analyse_images(image_list,field,path,
                     previous_parallaxes = accepted_parallaxes
                     previous_pms = accepted_pms
                     previous_offsets = accepted_offsets
+                    
+                    if step_ind == 10:
+                        #check if the lnpost values are finite after 10 steps, and restart the fitting if necessary
+                        if not np.any(np.isfinite(lnposts[:,step_ind])):
+                            print('WARNING: Something is causing invalid posterior values. Truncating and trying again.')
+                            nsteps = 10
+                            step_inds = np.arange(nsteps).astype(int)
+                            
+                            samplerChain_parallaxes = samplerChain_parallaxes[:,:nsteps]
+                            samplerChain_pms = samplerChain_pms[:,:nsteps]
+                            samplerChain_offsets = samplerChain_offsets[:,:nsteps]
+                            
+                            samplerChain = samplerChain[:,:nsteps] 
+                            
+                            lnposts = lnposts[:,:nsteps] 
+                            accept_fracs = accept_fracs[:nsteps]
+                            stretch_a_vals = stretch_a_vals[:nsteps]
+                            
+                            bad_posterior = True
+                            break
+                        
+                burnin = int(0.7*nsteps)
     
         #         samplerChain = sampler.chain
                 samples = samplerChain[:, burnin:, :].reshape((-1, ndim))
@@ -3473,7 +3632,12 @@ def analyse_images(image_list,field,path,
                 n_changed = len(common_outliers)-len(all_possible_outliers)
 
                 force_repeat = False
-                if (np.sum(missing_prior_PM) > 0) and (fit_count == 0):
+                if bad_posterior:
+                    force_repeat = True
+                if (fit_count == 0) and (len(keep_stars) < 20):
+                    force_repeat = True
+                    pass
+                elif (np.sum(missing_prior_PM) > 0) and (fit_count == 0):
                     #then repeat at least one iteration to have better
                     #prior PMs on the stars that are missing Gaia priors
                     force_repeat = True
@@ -3518,7 +3682,11 @@ def analyse_images(image_list,field,path,
 #                    stop_fitting = True
                     break
                 
-                if force_repeat:
+                if force_repeat and bad_posterior:
+                    print(f'Repeating the fit because of failed posterior values.')
+                elif force_repeat and (len(keep_stars) < 20):
+                    print(f'Repeating the fit because there are not many stars.')
+                elif force_repeat:
                     print(f'Repeating the fit to get better priors for the {np.sum(unique_missing_prior_PM)} target(s) without Gaia priors.')
                 else:
                     print(f'There are {np.sum(outliers)} outliers of the {len(outliers)} measures outside {n_sigma_keep} sigma, so repeating the fit.')
@@ -3755,7 +3923,9 @@ def analyse_images(image_list,field,path,
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
             for star_ind in range(len(unique_inds)):
-                if unique_missing_prior_PM[star_ind] or not(keep_plot[star_ind]):
+#                if unique_missing_prior_PM[star_ind] or not(keep_plot[star_ind]):
+#                    continue
+                if unique_missing_prior_PM[star_ind]:
                     continue
                     
                 curr_cov = gaia_pm_covs[unique_inds[star_ind]]
@@ -3800,8 +3970,8 @@ def analyse_images(image_list,field,path,
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
             for star_ind in range(len(unique_inds)):
-                if not(keep_plot[star_ind]):
-                    continue
+#                if not(keep_plot[star_ind]):
+#                    continue
             
                 curr_cov = gaiahub_pm_covs[unique_inds[star_ind]]
                 if not np.all(np.isfinite(curr_cov)):
@@ -3840,9 +4010,9 @@ def analyse_images(image_list,field,path,
             plt.ylabel(r'GaiaHub $\mu_{\mathrm{Dec}}$ (mas/yr)')
             plt.axhline(0,c='k',ls='--',lw=0.5)
             plt.axvline(0,c='k',ls='--',lw=0.5)
-            if field not in ['COSMOS_field']:
-                xlim = plt.xlim()
-                ylim = plt.ylim()
+#            if field not in ['COSMOS_field']:
+#                xlim = plt.xlim()
+#                ylim = plt.ylim()
     #        else:
     #            plt.ylim(ylim);plt.xlim(xlim)
             
@@ -3852,8 +4022,8 @@ def analyse_images(image_list,field,path,
             plt.grid(visible=True, which='minor', color='#999999', linestyle='-', alpha=0.1)
             ax.tick_params(axis='both',direction='inout',length=5,bottom=True,left=True,right=True,top=True)
             for star_ind in range(len(unique_inds)):
-                if not(keep_plot[star_ind]):
-                    continue
+#                if not(keep_plot[star_ind]):
+#                    continue
             
                 curr_cov = posterior_pm_covs[star_ind]
                 curr_med = posterior_pm_meds[star_ind]#+true_pms[star_ind]
@@ -3892,8 +4062,8 @@ def analyse_images(image_list,field,path,
             plt.ylabel(r'BPPPM $\mu_{\mathrm{Dec}}$ (mas/yr)')
             plt.axhline(0,c='k',ls='--',lw=0.5)
             plt.axvline(0,c='k',ls='--',lw=0.5)
-            if field not in ['COSMOS_field']:
-                plt.ylim(ylim);plt.xlim(xlim)
+#            if field not in ['COSMOS_field']:
+#                plt.ylim(ylim);plt.xlim(xlim)
             
             plot_gaia_err_size = np.where(~unique_missing_prior_PM)[0]
             plot_gaiahub = np.where(~unique_only_hst_sources)[0]
