@@ -1250,11 +1250,22 @@ def analyse_images(image_list,field,path,
                     data_combined[mask_name][param] = np.array(data_combined[mask_name][param])
                                         
                 gaia_id = np.copy(data_combined[mask_name]['Gaia_id'])
-                sort_gaia_id_inds = np.argsort(gaia_id)
+                if fit_count == 0:
+                    good_hst_only = np.ones(len(gaia_id)).astype(bool)
+                    if fit_all_hst:
+                        #check HST-only stars to see if they have multiple occurances in the HST data
+                        #removing them if they don't
+                        unique_ids,unique_inds,unique_inv_inds,unique_counts = np.unique(gaia_id,return_index=True,
+                                                                                         return_inverse=True,return_counts=True)
+                        for j,star_name in enumerate(unique_ids):
+                            if (unique_counts[j] == 1) and ('HST' == str(star_name)[:3]):
+                                match_ind = np.where(gaia_id == star_name)[0][0]
+                                good_hst_only[match_ind] = False
+                sort_gaia_id_inds = np.argsort(gaia_id)[good_hst_only]
                 if len(sort_gaia_id_inds) > max_stars:
                     sort_gaia_id_inds = sort_gaia_id_inds[:max_stars]
                 gaia_id = np.copy(data_combined[mask_name]['Gaia_id'])[sort_gaia_id_inds]
-                
+                            
                 x,y = data_combined[mask_name]['X'][sort_gaia_id_inds],data_combined[mask_name]['Y'][sort_gaia_id_inds] #in HST pixels
                 x_hst_err,y_hst_err = data_combined[mask_name]['X_hst_err'][sort_gaia_id_inds],data_combined[mask_name]['Y_hst_err'][sort_gaia_id_inds] #in HST pixels
                 x_g,y_g = data_combined[mask_name]['X_G'][sort_gaia_id_inds],data_combined[mask_name]['Y_G'][sort_gaia_id_inds] #in Gaia pixels
@@ -1296,9 +1307,10 @@ def analyse_images(image_list,field,path,
                 use_for_fit[:] = True
                 if fit_count == 0:
                     use_for_fit[only_hst_sources] = False
-                use_for_fit[only_hst_sources] = False
-                
+#                use_for_fit[only_hst_sources] = False
+                                
                 if fit_count == 0:
+                    
                     unique_ids,unique_inds,unique_inv_inds,unique_counts = np.unique(gaia_id,return_index=True,
                                                                                      return_inverse=True,return_counts=True)
                     
@@ -1376,23 +1388,7 @@ def analyse_images(image_list,field,path,
                 gaiahub_pm_ys = data_combined[mask_name]['gaiahub_pm_y'][sort_gaia_id_inds]
                 gaiahub_pm_x_errs = data_combined[mask_name]['gaiahub_pm_x_err'][sort_gaia_id_inds]
                 gaiahub_pm_y_errs = data_combined[mask_name]['gaiahub_pm_y_err'][sort_gaia_id_inds]
-                            
-                image_name = curr_hst_image_name
-    #            image_name = hst_image_names[0]
-                outpath = f'{path}{mask_name}/Bayesian_PMs/{image_name}/'
-                if not os.path.isdir(outpath):
-                    os.makedirs(outpath)
-                                    
-                final_file = f'{outpath}{image_name}{final_file_ext}'
-#                print(final_fig)
-#                final_fig = f'{outpath}{image_name}_posterior_population_PM_offset_analysis_pop_dist.png'
-                if os.path.isfile(final_file):
-                    file_time = os.path.getmtime(final_file)
-                    if (file_time > thresh_time) and (not overwrite_previous):
-                        print(f'SKIPPING fit of image {image_name} in {mask_name} because it has recently been analysed.')
-                        skip_fitting = True
-                        break
-                
+                                                    
                 gaia_pms = np.array([gaia_pm_xs,gaia_pm_ys]).T        
                 gaia_pms[stationary] = 0
                 gaia_pm_xs[stationary] = 0
@@ -1405,6 +1401,27 @@ def analyse_images(image_list,field,path,
                 gaia_err_sizes = np.sqrt(np.power(gaia_pm_x_errs,2)+np.power(gaia_pm_y_errs,2))
                 if fit_count == 0:
                     missing_prior_PM = ~np.isfinite(gaia_err_sizes) #also missing parallax
+                            
+                image_name = curr_hst_image_name
+    #            image_name = hst_image_names[0]
+                outpath = f'{path}{mask_name}/Bayesian_PMs/{image_name}/'
+                if not os.path.isdir(outpath):
+                    os.makedirs(outpath)
+                    
+                final_file = f'{outpath}{image_name}{final_file_ext}'
+#                print(final_fig)
+#                final_fig = f'{outpath}{image_name}_posterior_population_PM_offset_analysis_pop_dist.png'
+                num_good_priors = len(unique_ids)-np.sum(missing_prior_PM[unique_inds])
+                if field == 'COSMOS_field':
+                    if num_good_priors <= 3:
+                        overwrite_previous = True
+                
+                if os.path.isfile(final_file):
+                    file_time = os.path.getmtime(final_file)
+                    if (file_time > thresh_time) and (not overwrite_previous):
+                        print(f'SKIPPING fit of image {image_name} in {mask_name} because it has recently been analysed.')
+                        skip_fitting = True
+                        break
                 
                 #change covariance matrices for missing gaia priors and stationary sources
                 gaia_vector_covs[missing_prior_PM,2:] = 0
@@ -1556,12 +1573,13 @@ def analyse_images(image_list,field,path,
     
                 if (n_images > 1) and (n_stars_unique == len(gaia_id)):
                     print(f"SKIPPING fit of image(s) {image_name} in {mask_name} because no sources are shared between HST images. The results will be the same as running each image alone (and much slower).")
-    
+                    skip_fitting = True
+                    break
                 iteration_string = f'   Iteration {fit_count}   '
                 print('\n'+f'-'*len(iteration_string))
                 print(iteration_string)
                 print(f'-'*len(iteration_string))
-                
+                                
                 print()
                 print(f"Fitting {n_images} image(s) in {mask_name} using image {hst_image_names}")
                 if fit_count == 0:
@@ -1572,6 +1590,8 @@ def analyse_images(image_list,field,path,
                 print(f'Current image(s) have a total of {n_stars_unique} unique targets.')
                 print(f'The unique targets are found in an average (min,max) of {round(n_stars/n_stars_unique,1)} ({unique_counts.min()},{unique_counts.max()}) images.')
                 print(f'There are {np.sum(unique_missing_prior_PM)} target(s) missing priors from Gaia.')    
+                if fit_all_hst:
+                    print(f'There are {np.sum(unique_only_hst_sources)} unique sources with only HST-measured positions.')
                 print(f'Using {n_used_stars_unique}/{n_stars_unique} targets in the transformation parameter fitting.')
                 if fit_count == 0:
                     hst_pix_sigmas = np.zeros((len(x),2))
@@ -1622,7 +1642,7 @@ def analyse_images(image_list,field,path,
                 #use the initial parameters and priors on parallaxes to give a better estimate of the 
                 #prior on the stars that don't have gaia parallaxes
                 max_pm_err = 300.0
-                if fit_count == 0:
+                if (fit_count == 0) or previous_bad_posterior:
                     #use the mean from the other stars
                     if np.sum(unique_not_stationary&~unique_missing_prior_PM) > 1:
                         curr_inds = unique_inds[unique_not_stationary&~unique_missing_prior_PM]
@@ -1648,7 +1668,7 @@ def analyse_images(image_list,field,path,
                     gaia_parallax_ivar = np.power(gaia_parallax_errs[curr_inds],-2)
                     mean_gaia_parallax = np.nansum(gaia_parallaxes[curr_inds]*gaia_parallax_ivar)/np.nansum(gaia_parallax_ivar)
                     
-                    mean_gaia_parallax = np.nanmedian(gaia_parallaxes[curr_inds])
+                    mean_gaia_parallax = max(0,np.nanmedian(gaia_parallaxes[curr_inds]))
                     
                     if not np.isfinite(mean_gaia_parallax):
                         mean_gaia_parallax = 0.5
@@ -1662,6 +1682,9 @@ def analyse_images(image_list,field,path,
                     diff[bad_pm_y,3] = 0
                     diff[bad_parallax,4] = 0
                     global_vector_cov = (np.einsum('ni,nj->ij',diff,diff)/(len(diff)-1))*10**2
+                    #remove any correlation, making the distribution larger
+                    global_vector_cov = np.diag(np.diag(global_vector_cov))
+                    
                     if np.sum(bad_pm_x) > 0:
                         mult_val = max(1.0**2,10**2/global_vector_cov[2,2])
                         global_vector_cov[2] *= mult_val
@@ -1674,7 +1697,8 @@ def analyse_images(image_list,field,path,
                         mult_val = max(1.0**2,10**2/global_vector_cov[4,4])
                         global_vector_cov[4] *= mult_val
                         global_vector_cov[:,4] *= mult_val
-                    
+                    if (num_good_priors < 3):
+                        global_vector_cov[2:4,2:4] = np.array([[max_pm_err**2,0],[0,max_pm_err**2]])
                 else:
                     if np.sum(unique_not_stationary&unique_keep&~unique_missing_prior_PM) > 1:
                         curr_unique_inds = unique_not_stationary&unique_keep&~unique_missing_prior_PM
@@ -1703,11 +1727,15 @@ def analyse_images(image_list,field,path,
                     gaia_pms[missing_prior_PM] = np.array([post_means[2],post_means[3]])
                     gaia_pm_xs[missing_prior_PM] = post_means[2]
                     gaia_pm_ys[missing_prior_PM] = post_means[3]
-                    mean_gaia_parallax = post_means[4]
+                    mean_gaia_parallax = max(0,post_means[4])
                     
-                    global_vector_mean = np.array([0,0,post_means[2],post_means[3],post_means[4]])
+                    global_vector_mean = np.array([0,0,post_means[2],post_means[3],max(0,post_means[4])])
                     diff = all_post_meds[curr_unique_inds]-global_vector_mean
                     global_vector_cov = (np.einsum('ni,nj->ij',diff,diff)/(len(diff)-1))*10**2
+                    
+                    #remove any correlation, making the distribution larger
+                    global_vector_cov = np.diag(np.diag(global_vector_cov))
+                    
                 if (not np.isfinite(global_vector_cov[2,2])) or (not np.isfinite(global_vector_cov[3,3])):
                     global_vector_cov[2:4,2:4] = np.array([[max_pm_err**2,0],[0,max_pm_err**2]])
                 try:
@@ -1751,13 +1779,19 @@ def analyse_images(image_list,field,path,
                     print(f'%{char_print}.2f'%val,end=' ')
                 print()
                 print()
-                
+                                
                 global_parallax_mean = global_vector_mean[4]
                 global_parallax_var = global_vector_cov[4,4]
                 global_parallax_ivar = 1/global_parallax_var
                 global_pm_mean = global_vector_mean[2:4]
                 global_pm_cov = global_vector_cov[2:4,2:4]
-                global_pm_inv_cov = np.linalg.inv(global_pm_cov)
+                try:
+                    #check if global_pm_cov singular
+                    global_pm_inv_cov = np.linalg.inv(global_pm_cov)
+                except:
+                    global_pm_cov = np.array([[max_pm_err**2,0],[0,max_pm_err**2]])
+                    global_pm_inv_cov = np.linalg.inv(global_pm_cov)
+                global_vector_cov[2:4,2:4] = global_pm_cov
                     
                 #put a diffuse prior on the missing proper motions
                 gaia_pm_x_errs[missing_prior_PM] = 300 #mas/yr
@@ -1852,10 +1886,12 @@ def analyse_images(image_list,field,path,
                 
                 gaia_pms = np.copy(gaia_vectors[:,2:4])
                 
-                if fit_count == 0:
+                if (fit_count == 0):
                     best_pm_parallax_offsets = np.zeros(len(x)*5)
                     #resort so that it goes rot,ratio,w0,z0,on_skew,off_skew
                     best_trans_params = np.zeros(n_images*n_param_indv)
+                    gaiahub_trans_params = np.zeros(n_images*n_param_indv)
+
                     for j in range(n_images):
                         x0,y0,w0,z0,ag,bg,cd,dg,rot_sign = param_outputs[j]
                         
@@ -1893,6 +1929,7 @@ def analyse_images(image_list,field,path,
                             w0_offset,z0_offset = 0,0
                                                 
                         best_trans_params[j*n_param_indv:(j+1)*n_param_indv] = ag,bg,w0+w0_offset,z0+z0_offset,cd,dg
+                        gaiahub_trans_params[j*n_param_indv:(j+1)*n_param_indv] = ag,bg,w0,z0,cd,dg
                         
                     for star_ind in np.where(missing_prior_PM)[0]:
                         star_name = gaia_id[star_ind]
@@ -1905,6 +1942,8 @@ def analyse_images(image_list,field,path,
                         gaia_pms[star_ind] = curr_pm_x,curr_pm_y
                         gaia_parallaxes[star_ind] = curr_parallax
                 recent_trans_params = best_trans_params
+                if previous_bad_posterior:
+                    recent_trans_params = gaiahub_trans_params
                       
                 ags = recent_trans_params[0::n_param_indv]
                 bgs = recent_trans_params[1::n_param_indv]
@@ -2348,7 +2387,8 @@ def analyse_images(image_list,field,path,
                   indv_orig_pixel_scales,reverse_only_hst_inds,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                     
-                if (fit_count == 0) or previous_bad_posterior:
+#                if (fit_count == 0) or previous_bad_posterior:
+                if (fit_count == 0):
                     print('Getting better first guess parameters.')
                     better_guess_time = time.time()
                     n_repeat_test = 20
@@ -2419,9 +2459,10 @@ def analyse_images(image_list,field,path,
                             break
                         previous_best_params = np.copy(recent_trans_params)
                     print('Done. Took %d iterations and %.2f seconds.'%(j+1,time.time()-better_guess_time))
-                    
+                
                 pos0 = np.copy(recent_trans_params)
-                            
+                if previous_bad_posterior:
+                    pos0 = np.copy(gaiahub_trans_params)
             #    nwalkers,ndim,nsteps = int(len(pos0)*2),len(pos0),100
     
             #     pos = pos0*(1+1e-3*np.random.randn(nwalkers*ndim).reshape((nwalkers,ndim)))

@@ -276,7 +276,7 @@ def gaiahub_BPMs(argv):
 if __name__ == '__main__':
     
     testing = False
-    testing = True
+#    testing = True
     
     if not testing:
         gaiahub_BPMs(sys.argv[1:])
@@ -477,8 +477,40 @@ if __name__ == '__main__':
             
             if field == 'COSMOS_field':
                 #only list of nearby observation times
+                
+                new_list = []
+#                for j,entry in enumerate(tqdm(indv_list_array,total=len(indv_list_array))):
+                for j,entry in enumerate(indv_list_array):
+                    linked_df = pd.read_csv(f'{outpath}{entry}/{entry}_linked_images.csv')
+                    curr_names = linked_df['image_name'].to_numpy()
+                    curr_time_offsets = linked_df['time_offset'].to_numpy()
+                    oldest_ind = np.argmin(curr_time_offsets)
+                    newest_ind = np.argmax(curr_time_offsets)
+                    
+#                    curr_im_ind = np.argmin(np.abs(curr_time_offsets))
+#                    max_offset_ind = np.argmax(np.abs(curr_time_offsets))
+#                    if curr_time_offsets[curr_im_ind] < curr_time_offsets[max_offset_ind]:
+#                        newest_ind = max_offset_ind
+#                        oldest_ind = curr_im_ind
+#                    else:
+#                        newest_ind = curr_im_ind
+#                        oldest_ind = max_offset_ind
+                    
+                    hst_baseline = curr_time_offsets[newest_ind]-curr_time_offsets[oldest_ind]
+                    if hst_baseline < 0.3:
+#                    if abs(hst_baseline) < 1:
+                        continue
+                    new_entry = [curr_names[oldest_ind],curr_names[newest_ind]]
+                    if new_entry not in new_list:
+                        new_list.append(new_entry)
+                        
+                linked_image_list.extend(new_list)
+                        
+#                linked_image_list.extend(match_time_list)
+                
+#                linked_image_list = new_list
+                
 #                linked_image_list = match_time_list
-                linked_image_list.extend(match_time_list)
 #            elif field == 'FAKE_ROMAN_01':
 #                #only list of nearby observation times
 #                linked_image_list = [
@@ -599,13 +631,19 @@ if __name__ == '__main__':
                         
 #                if field in ['FAKE_FIELD_07']:
 #                    overwrite_previous = True
+                    
                         
-                final_file = f'{outpath}{image_name}{final_file_ext}'
-                if os.path.isfile(final_file):
-                    file_time = os.path.getmtime(final_file)
-                    if (file_time > thresh_time) and (not overwrite_previous):
-                        print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
-                        continue
+#                final_file = f'{outpath}{image_name}{final_file_ext}'
+#                if os.path.isfile(final_file):
+#                    file_time = os.path.getmtime(final_file)
+#                    if (file_time > thresh_time) and (not overwrite_previous):
+#                        print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
+#                        continue
+                    
+                fit_all_hst = False
+                if field in ['COSMOS_field']:
+                    if len(entry) > 1:
+                        fit_all_hst = True
                 
                 entry_list = ' '.join(entry)
                 overwrite_previous_string = ''
