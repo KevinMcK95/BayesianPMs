@@ -59,6 +59,8 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 
 #used to decide if previous analyses should automatically be overwritten because of newer version of code 
 last_update_time = (datetime.datetime(2023, 6, 27, 13, 19, 5, 519092)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+cosmos_update_time = (datetime.datetime(2023, 8, 12, 17, 23, 30, 283714)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
+
 #last_update_time = (datetime.datetime(2023, 7, 6, 12, 0, 0, 0)-datetime.datetime.utcfromtimestamp(0)).total_seconds()+7*3600
 final_file_ext = '_fit_summary.csv'
 #final_file_ext = '_posterior_transformation_6p_matrix_params_covs.npy'
@@ -148,6 +150,8 @@ def gaiahub_single_BPMs(argv):
     
     #probably want to figure out how to ask the user for a thresh_time
     thresh_time = last_update_time
+    if field == 'COSMOS_field':
+        thresh_time = cosmos_update_time
     
 #    print('image_names',image_names)
         
@@ -499,6 +503,7 @@ def lnpost_vector(params,
                                                                  X0=indv_x_gaia_centers[first_hst_only_inds],
                                                                  Y0=indv_y_gaia_centers[first_hst_only_inds],
                                                                  pixel_scale=indv_orig_pixel_scales[first_hst_only_inds])
+                
         #use the jacobian to change the HST-uncertainties (in Gaia pixels) to 
         #uncertainties in racosdec and dec in mas
         new_gaia_covs = np.einsum('nij,njk->nik',new_jacs,np.einsum('nij,nkj->nik',star_hst_gaia_pos_cov[first_hst_only_inds],new_jacs))
@@ -1003,6 +1008,7 @@ def analyse_images(image_list,field,path,
             fit_count = 0 #iteration of the number of fits performed
             total_fit_start = time.time()
             bad_posterior = False
+            previous_bad_posterior = False
             
             if len(keep_im_nums) == 1:
                 #only fit the too-faint, no-Gaia-info HST sources if using multiple HST images
@@ -1304,12 +1310,17 @@ def analyse_images(image_list,field,path,
                     proper_offset_jacs[:,1,1] = 1
     #                print(proper_offset_jacs[0])
     #                new_proper_offset_jacs = np.zeros((len(x),2,2))
-    #                for star_ind in range(len(x)):
-    #                    ra,dec = gaia_ras[star_ind]*np.pi/180,gaia_decs[star_ind]*np.pi/180
-    #                    img_num = img_nums[star_ind]
-    #                    ra0,dec0 = ra_centers[img_num]*np.pi/180,dec_centers[img_num]*np.pi/180
-    #                    new_proper_offset_jacs[star_ind] = offset_jac(ra,dec,ra0,dec0)
-    #                print(new_proper_offset_jacs[0])
+#                    for star_ind in range(len(x)):
+#                        curr_ra,curr_dec = gaia_ras[star_ind],gaia_decs[star_ind]
+#                        img_num = img_nums[star_ind]
+#                        curr_ra0,curr_dec0 = ra_gaia_centers[img_num],dec_gaia_centers[img_num]
+#                        curr_X0,curr_Y0 = x_gaia_centers[img_num],y_gaia_centers[img_num]
+#                        curr_gaia_pix_scale = orig_pixel_scales[img_num]
+##                        new_proper_offset_jacs[star_ind] = offset_jac(ra,dec,ra0,dec0)
+                    proper_offset_jacs = source_match.XY_and_Jac_from_RADec(gaia_ras,gaia_decs,
+                                                                            indv_ra_gaia_centers,indv_dec_gaia_centers,
+                                                                            indv_x_gaia_centers,indv_y_gaia_centers,
+                                                                            indv_orig_pixel_scales)[1]
     #                print(np.dot(new_proper_offset_jacs[0],proper_offset_jacs[0]))
     #                laksjd;lksd
     
@@ -1557,7 +1568,7 @@ def analyse_images(image_list,field,path,
                     print(f'Using {n_threads} CPU(s).')
                     if n_stars_unique == np.sum(unique_missing_prior_PM):
                         print(f"WARNING: image(s) {image_name} in {mask_name} have no sources with Gaia priors, which will likely impact results.")
-                print(f'Current image(s) have time baselines of {np.round((gaia_mjd-keep_im_mjds)/365,2)} years from Gaia.')
+                print(f'Current image(s) have time baselines of {-1*np.round((gaia_mjd-keep_im_mjds)/365.25,2)} years from Gaia.')
                 print(f'Current image(s) have a total of {n_stars_unique} unique targets.')
                 print(f'The unique targets are found in an average (min,max) of {round(n_stars/n_stars_unique,1)} ({unique_counts.min()},{unique_counts.max()}) images.')
                 print(f'There are {np.sum(unique_missing_prior_PM)} target(s) missing priors from Gaia.')    
@@ -1589,7 +1600,8 @@ def analyse_images(image_list,field,path,
     #            print(f"\nFitting {n_images} images in {mask_name} using image {hst_image_names}")
     #            print(f'Current images have a total of n_stars = {n_stars}. Using {n_used_stars}/{n_stars} stars in the transformation parameter fitting.\n')
                                 
-                gaiahub_pm_err_sizes = np.sqrt(np.power(gaiahub_pm_x_errs,2)+np.power(gaiahub_pm_y_errs,2))
+#                gaiahub_pm_err_sizes = np.sqrt(np.power(gaiahub_pm_x_errs,2)+np.power(gaiahub_pm_y_errs,2))
+                gaiahub_pm_err_sizes = np.power(np.power(gaiahub_pm_x_errs,2)*np.power(gaiahub_pm_y_errs,2),0.25)
                 gaiahub_pms = np.array([gaiahub_pm_xs,gaiahub_pm_ys]).T
                 gaiahub_pm_covs = np.zeros((len(x),2,2))
                 gaiahub_pm_covs[:,0,0] = np.power(gaiahub_pm_x_errs,2)
@@ -1609,9 +1621,10 @@ def analyse_images(image_list,field,path,
                                                 
                 #use the initial parameters and priors on parallaxes to give a better estimate of the 
                 #prior on the stars that don't have gaia parallaxes
+                max_pm_err = 300.0
                 if fit_count == 0:
                     #use the mean from the other stars
-                    if np.sum(unique_not_stationary&~unique_missing_prior_PM) > 3:
+                    if np.sum(unique_not_stationary&~unique_missing_prior_PM) > 1:
                         curr_inds = unique_inds[unique_not_stationary&~unique_missing_prior_PM]
                     else:
                         curr_inds = unique_inds[unique_not_stationary]
@@ -1663,7 +1676,7 @@ def analyse_images(image_list,field,path,
                         global_vector_cov[:,4] *= mult_val
                     
                 else:
-                    if np.sum(unique_not_stationary&unique_keep&~unique_missing_prior_PM) > 3:
+                    if np.sum(unique_not_stationary&unique_keep&~unique_missing_prior_PM) > 1:
                         curr_unique_inds = unique_not_stationary&unique_keep&~unique_missing_prior_PM
                     else:
                         curr_unique_inds = unique_not_stationary&unique_keep
@@ -1696,10 +1709,18 @@ def analyse_images(image_list,field,path,
                     diff = all_post_meds[curr_unique_inds]-global_vector_mean
                     global_vector_cov = (np.einsum('ni,nj->ij',diff,diff)/(len(diff)-1))*10**2
                 if (not np.isfinite(global_vector_cov[2,2])) or (not np.isfinite(global_vector_cov[3,3])):
-                    global_vector_cov[2:4,2:4] = np.array([[300**2,0],[0,300**2]])
+                    global_vector_cov[2:4,2:4] = np.array([[max_pm_err**2,0],[0,max_pm_err**2]])
+                try:
+                    #check if it is singular as well
+                    np.linalg.inv(global_vector_cov[2:4,2:4])
+                except:
+                    global_vector_cov[2:4,2:4] = np.array([[max_pm_err**2,0],[0,max_pm_err**2]])
+                    
                 global_vector_mean[~np.isfinite(global_vector_mean)] = 0
+                cov_mult_factor = max(0.1**2,min(1.0**2,max_pm_err**2/global_vector_cov[2,2],max_pm_err**2/global_vector_cov[3,3]))
+                global_vector_cov *= cov_mult_factor
                 min_pm_err = 10.0
-                cov_mult_factor = max(1.0,min_pm_err**2/global_vector_cov[2,2],min_pm_err**2/global_vector_cov[3,3])
+                cov_mult_factor = max(1.0**2,min_pm_err**2/global_vector_cov[2,2],min_pm_err**2/global_vector_cov[3,3])
                 global_vector_cov *= cov_mult_factor
                 
                 global_vector_cov_copy = np.zeros_like(global_vector_cov)
@@ -1753,7 +1774,9 @@ def analyse_images(image_list,field,path,
                 gaia_pm_cov_eig_vals = np.sqrt(gaia_pm_cov_eig_vals)
                 gaia_pm_err_vects = np.array([gaia_pm_cov_eig_vals[:,0][:,None]*gaia_pm_cov_eig_vects[:,:,0],\
                                               gaia_pm_cov_eig_vals[:,1][:,None]*gaia_pm_cov_eig_vects[:,:,1]])
-                gaia_err_size = np.sqrt(np.sum(np.power(gaia_pm_err_vects[0],2),axis=1)+np.sum(np.power(gaia_pm_err_vects[1],2),axis=1))
+#                gaia_err_size = np.sqrt(np.sum(np.power(gaia_pm_err_vects[0],2),axis=1)+np.sum(np.power(gaia_pm_err_vects[1],2),axis=1))
+                gaia_pm_corrs = gaia_pm_covs[:,0,1]/np.sqrt(gaia_pm_covs[:,0,0]*gaia_pm_covs[:,1,1])
+                gaia_err_size = np.power(gaia_pm_covs[:,0,0]*gaia_pm_covs[:,1,1]*(1-np.power(gaia_pm_corrs,2)),0.25)
         #        gaia_err_size = np.sqrt(np.power(gaia_pm_x_errs,2)+np.power(gaia_pm_y_errs,2))
                 #change this so that it is the 
 #                inv_gaia_pm_covs = np.linalg.inv(gaia_pm_covs)
@@ -1860,7 +1883,9 @@ def analyse_images(image_list,field,path,
                                                                                   +gaia_parallaxes[curr_img,None]*parallax_offset_vector[curr_img])
                         
                         if n_images == 1:
-                            if np.sum(keep_stars) > 3:
+                            if np.sum((~missing_prior_PM) & keep_stars) > 1:
+                                w0_offset,z0_offset = np.nanmedian(data_diff_vals[(~missing_prior_PM) & keep_stars],axis=0)
+                            elif np.sum(keep_stars) > 1:
                                 w0_offset,z0_offset = np.nanmedian(data_diff_vals[keep_stars],axis=0)
                             else:
                                 w0_offset,z0_offset = np.nanmedian(data_diff_vals,axis=0)
@@ -2323,7 +2348,7 @@ def analyse_images(image_list,field,path,
                   indv_orig_pixel_scales,reverse_only_hst_inds,
                                             seed=walker_ind+(step_ind+1)*(nwalkers_sample+1))                    
                     
-                if (fit_count == 0):
+                if (fit_count == 0) or previous_bad_posterior:
                     print('Getting better first guess parameters.')
                     better_guess_time = time.time()
                     n_repeat_test = 20
@@ -2783,6 +2808,7 @@ def analyse_images(image_list,field,path,
                 np.save(f'{outpath}{image_name}_used_stars.npy',keep_stars)
                 print('Done MCMC Fitting. Plotting results.')
                 
+#                print('Previous bad:',previous_bad_posterior)
                 best_pm_parallax_offsets = np.zeros((len(x)*gaia_vectors.shape[1]))
                 for ind in range(gaia_vectors.shape[1]):
                     best_pm_parallax_offsets[ind::gaia_vectors.shape[1]] = post_pm_parallax_offset_meds[ind::gaia_vectors.shape[1]][unique_inv_inds]
@@ -3632,9 +3658,9 @@ def analyse_images(image_list,field,path,
                 n_changed = len(common_outliers)-len(all_possible_outliers)
 
                 force_repeat = False
-                if bad_posterior:
+                if bad_posterior or previous_bad_posterior:
                     force_repeat = True
-                if (fit_count == 0) and (len(keep_stars) < 20):
+                elif (fit_count == 0) and (len(keep_stars) < 20):
                     force_repeat = True
                     pass
                 elif (np.sum(missing_prior_PM) > 0) and (fit_count == 0):
@@ -3681,8 +3707,9 @@ def analyse_images(image_list,field,path,
                     print(f'Stopping fitting iterations because we have reached the maximum of {n_fit_max}, though there are still currently {np.sum(outliers)} outliers of the {len(outliers)} targets outside {n_sigma_keep} sigma.')
 #                    stop_fitting = True
                     break
-                
-                if force_repeat and bad_posterior:
+                if force_repeat and previous_bad_posterior:
+                    print(f'Repeating the fit because the previous posterior values failed.')
+                elif force_repeat and bad_posterior:
                     print(f'Repeating the fit because of failed posterior values.')
                 elif force_repeat and (len(keep_stars) < 20):
                     print(f'Repeating the fit because there are not many stars.')
@@ -3691,7 +3718,7 @@ def analyse_images(image_list,field,path,
                 else:
                     print(f'There are {np.sum(outliers)} outliers of the {len(outliers)} measures outside {n_sigma_keep} sigma, so repeating the fit.')
                 print()
-    
+                previous_bad_posterior = bad_posterior
     #        break
             if skip_fitting:
                 continue
@@ -4072,6 +4099,9 @@ def analyse_images(image_list,field,path,
             keep_gmag_order = np.argsort(g_mag[unique_inds][plot_gaia_err_size])
             gaiahub_keep_gmag_order = np.argsort(g_mag[unique_inds][plot_gaiahub])
             
+            posterior_pm_corrs = posterior_pm_covs[:,0,1]/np.sqrt(posterior_pm_covs[:,0,0]*posterior_pm_covs[:,1,1])
+            new_err_sizes = np.power(posterior_pm_covs[:,0,0]*posterior_pm_covs[:,1,1]*(1-np.power(posterior_pm_corrs,2)),0.25)
+            
             ax = plt.subplot(gs[1, 0:3])
             plt.grid(visible=True, which='major', color='#666666', linestyle='-',alpha=0.3)
             plt.minorticks_on()
@@ -4083,12 +4113,13 @@ def analyse_images(image_list,field,path,
                      gaiahub_pm_err_sizes[unique_inds][plot_gaiahub][gaiahub_keep_gmag_order],
                      marker='.',ms=10,color='r',label='GaiaHub',lw=2)
             plt.plot(g_mag[unique_inds][gmag_order],
-                        np.sqrt(np.sum(np.power(err_lengths,2),axis=1))[gmag_order],
+                        new_err_sizes[gmag_order],
                         marker='.',ms=10,color='C0',label='BPPPM',lw=2)
             xlim = plt.xlim()
             plt.axvspan(21,xlim[1],color='grey',alpha=0.2,zorder=-1e10)
             plt.xlim(xlim)
-            plt.ylabel(r'$||\sigma_{\mu}||$ (mas/yr)')
+#            plt.ylabel(r'$||\sigma_{\mu}||$ (mas/yr)')
+            plt.ylabel(r'$||\sigma_{\vec{\mu}}||$ (mas/yr)')
             plt.xlabel('G (mag)')
             ylim = plt.ylim()
             plt.ylim(0,ylim[1])
@@ -4105,7 +4136,7 @@ def analyse_images(image_list,field,path,
                     (gaia_err_size/gaiahub_pm_err_sizes)[unique_inds][plot_gaia_err_size][keep_gmag_order],
                     marker='.',ms=10,color='r',label='GaiaHub',lw=2)
             plt.plot(g_mag[unique_inds][plot_gaia_err_size][keep_gmag_order],
-                    (gaia_err_size[unique_inds]/np.sqrt(np.sum(np.power(err_lengths,2),axis=1)))[plot_gaia_err_size][keep_gmag_order],
+                    (gaia_err_size[unique_inds]/new_err_sizes)[plot_gaia_err_size][keep_gmag_order],
                     marker='.',ms=10,color='C0',label='BPPPM',lw=2)
             plt.ylabel(r'PM Error Improvement Factor')
             plt.xlabel('G (mag)')
@@ -4278,8 +4309,11 @@ def analyse_images(image_list,field,path,
             plt.close('all')
             
             #compare posterior offset uncertainties to Gaia 
-            gaia_pos_err_sizes = np.sqrt(np.power(gaia_ra_errs,2)+np.power(gaia_dec_errs,2))
-            posterior_pos_err_sizes = np.sqrt(posterior_offset_covs[:,0,0]+posterior_offset_covs[:,1,1])
+#            gaia_pos_err_sizes = np.sqrt(np.power(gaia_ra_errs,2)+np.power(gaia_dec_errs,2))
+#            posterior_pos_err_sizes = np.sqrt(posterior_offset_covs[:,0,0]+posterior_offset_covs[:,1,1])
+            gaia_pos_err_sizes = np.power(np.power(gaia_ra_errs,2)*np.power(gaia_dec_errs,2)*(1-np.power(gaia_ra_dec_corrs,2)),0.25)
+            posterior_offset_corrs = posterior_offset_covs[:,1,0]/np.sqrt(posterior_offset_covs[:,0,0]*posterior_offset_covs[:,1,1])
+            posterior_pos_err_sizes = np.power(posterior_offset_covs[:,0,0]*posterior_offset_covs[:,1,1]*(1-np.power(posterior_offset_corrs,2)),0.25)
             plt.figure(figsize=(2*5*(1.3**2),5))
             gs = gridspec.GridSpec(1,2,wspace=0.3)
                         

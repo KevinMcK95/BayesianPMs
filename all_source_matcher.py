@@ -11,7 +11,7 @@ import os
 import pandas as pd
 from tqdm import tqdm
 from decimal import getcontext,Decimal
-from math import atan2,asin,sqrt,pow
+from math import atan2,asin
 
 
 #import matplotlib.pyplot as plt
@@ -110,6 +110,69 @@ def RADec_from_XY(X,Y,ra0,dec0,X0,Y0,pixel_scale):
                 
     return ra,dec
 
+def XY_and_Jac_from_RADec(ra,dec,ra0,dec0,X0,Y0,pixel_scale):
+    '''
+    ra,dec,ra0,dec0 in degrees
+    pixel_scale in mas/pixel
+    X0,Y0 in pixels
+    X,Y in pixels
+    
+    equations come from xym2pm_GH.F, after line 2047
+    '''
+    
+    dec0_rad = dec0*np.pi/180
+    dec_rad = dec*np.pi/180
+    ra0_rad = ra0*np.pi/180
+    ra_rad = ra*np.pi/180
+    
+    cosra = np.cos(ra_rad-ra0_rad)
+    sinra = np.sin(ra_rad-ra0_rad)
+    cosde = np.cos(dec_rad)
+    sinde = np.sin(dec_rad)
+    cosd0 = np.cos(dec0_rad)
+    sind0 = np.sin(dec0_rad)
+    
+    rrrr = sind0*sinde + cosd0*cosde*cosra
+    #offsets in radians
+    dY = (cosd0*sinde-sind0*cosde*cosra)/rrrr
+    dX = cosde*sinra/rrrr
+    
+    x  = cosde*np.cos(ra_rad)
+    y  = cosde*np.sin(ra_rad)
+    z  = sinde
+    xx = cosd0*np.cos(ra0_rad)
+    yy = cosd0*np.sin(ra0_rad)
+    zz = sind0
+    bad_cond = (x*xx + y*yy + z*zz < 0)
+    dY[bad_cond] = np.pi/2
+    dX[bad_cond] = np.pi/2
+    
+    rad_to_pix = 180/np.pi*3600*1000/pixel_scale
+            
+    X = X0-dX*rad_to_pix
+    Y = Y0+dY*rad_to_pix    
+    
+    dX_ddeltaX = -1*rad_to_pix
+    dY_ddeltaY = 1*rad_to_pix
+    ddenom_dRA = -cosd0*cosde*sinra
+    ddenom_dDec = sind0*cosde-cosd0*sinde*cosra
+    rrrr2 = np.power(rrrr,2)
+    
+    dY_dRAcosDec = (1/cosde)*dY_ddeltaY*(sind0*cosde*sinra/rrrr-ddenom_dRA*(cosd0*sinde-sind0*cosde*cosra)/rrrr2)
+    dX_dRAcosDec = (1/cosde)*dX_ddeltaX*(cosde*cosra/rrrr-cosde*sinra*ddenom_dRA/rrrr2)
+    dY_dDec = dY_ddeltaY*((cosd0*cosde+sind0*sinde*cosra)/rrrr-ddenom_dDec*(cosd0*sinde-sind0*cosde*cosra)/rrrr2)
+    dX_dDec = dX_ddeltaX*(-sinde*sinra/rrrr-cosde*sinra*ddenom_dDec/rrrr2)
+    
+    jac = np.zeros((len(X),2,2))
+    jac[:,0,0] = dX_dRAcosDec
+    jac[:,0,1] = dX_dDec
+    jac[:,1,0] = dY_dRAcosDec
+    jac[:,1,1] = dY_dDec
+    jac /= rad_to_pix[:,None,None] #chang from dRAcosDec and dDec in rad to mas
+    
+    return np.array([X,Y]).T,jac
+
+
 def RADec_and_Jac_from_XY(X,Y,ra0,dec0,X0,Y0,pixel_scale):
     '''
     ra,dec,ra0,dec0 in degrees
@@ -165,8 +228,8 @@ def RADec_and_Jac_from_XY(X,Y,ra0,dec0,X0,Y0,pixel_scale):
     
     dra_dX = rad_to_deg*datan*(1/atan_args[1])*ddeltaX_dX
     dra_dY = rad_to_deg*datan*(-1*atan_div/atan_args[1]*(-1*sind0))*ddeltaY_dY
-    dracosdec_dX = dra_dX*np.cos(dec)*deg_to_mas
-    dracosdec_dY = dra_dY*np.cos(dec)*deg_to_mas
+    dracosdec_dX = dra_dX*np.cos(dec_rad)*deg_to_mas
+    dracosdec_dY = dra_dY*np.cos(dec_rad)*deg_to_mas
     ddec_dX = rad_to_mas*dasin*(-1*asin_args/summed_dx_dy)*dX*ddeltaX_dX
     ddec_dY = rad_to_mas*dasin*(-1*asin_args/summed_dx_dy*dY+cosd0/sqrt_summed_dx_dy)*ddeltaY_dY
     
@@ -793,8 +856,8 @@ if __name__ == '__main__':
     path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
     
     field = 'Fornax_dSph'
-#    field = 'COSMOS_field'
-    field = 'Draco_dSph'
+    field = 'COSMOS_field'
+#    field = 'Draco_dSph'
 
     source_matcher(field,path)
 

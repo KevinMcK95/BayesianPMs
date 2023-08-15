@@ -74,6 +74,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "1" # export NUMEXPR_NUM_THREADS=6
 curr_scripts_dir = os.path.dirname(os.path.abspath(__file__))
 n_max_threads = BPM.n_max_threads
 last_update_time = BPM.last_update_time
+cosmos_update_time = BPM.cosmos_update_time
 final_file_ext = BPM.final_file_ext
 
 def gaiahub_BPMs(argv):  
@@ -275,7 +276,7 @@ def gaiahub_BPMs(argv):
 if __name__ == '__main__':
     
     testing = False
-#    testing = True
+    testing = True
     
     if not testing:
         gaiahub_BPMs(sys.argv[1:])
@@ -313,6 +314,14 @@ if __name__ == '__main__':
         'Sextans_dSph',
         'Draco_dSph',
         'E3',
+        'Leo_II',
+        'Leo_A',
+        'NGC6822',
+        'Phoenix',
+        'SAG_DIG',
+        'Leo_T',
+        'IC_1613',
+        'WLM',
         'Arp2',
         'DDO_216',
         'IC_10',
@@ -325,22 +334,40 @@ if __name__ == '__main__':
         'M31',
         'Pal2',
         'Terzan8',
-        '47Tuc',
         'NGC2419',
+        '47Tuc',
+        ]
+        
+        fields = [        
+        'COSMOS_field',
         ]
         
 #        fields = [
-#        'Pal4',
-#        'Pal13',
-#        'Pal15',
-#        'M31',
-#        'Pal2',
-#        'Terzan8',
+#        'Sculptor_dSph',
 #        '47Tuc',
-#        'NGC2419',
-#        ]                
+#        ]
         
-        path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
+#        fields = [
+#        'FAKE_ROMAN_01',
+#        ]
+#        
+#        fields = [
+##        'FAKE_ROMAN_01',
+#        'FAKE_FIELD_07',
+#        'FAKE_FIELD_01',
+#        'FAKE_FIELD_06',
+#        'FAKE_FIELD_05',
+#        ]
+#        
+#        fields = [
+##        'FAKE_ROMAN_01',
+##        'FAKE_ROMAN_02',
+#        'FAKE_ROMAN_03',
+##        'FAKE_FIELD_07',
+##        'FAKE_FIELD_01',
+#        ]
+#        
+        
         overwrite_previous = True
         overwrite_previous = False
         overwrite_GH_summaries = False
@@ -348,13 +375,16 @@ if __name__ == '__main__':
         n_fit_max = 3
         n_fit_max = 5
         max_stars = 2000
+        max_stars = 500
         max_images = 10
+        max_images = 5
+        max_images = 2
         redo_without_outliers = True
         plot_indv_star_pms = True
         n_threads = n_max_threads
         
         individual_fit_only = False
-        individual_fit_only = True
+#        individual_fit_only = True
         
         fit_all_hst = False
         fit_population_pms = False
@@ -365,12 +395,28 @@ if __name__ == '__main__':
         image_names = 'y'
         
         for field in fields:
+            
+            thresh_time = last_update_time
+            if field == 'COSMOS_field':
+                thresh_time = cosmos_update_time
+            
+            if 'FAKE' in field:
+                path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/FAKE_GaiaHub_results/'
+            else:
+                path = '/Volumes/Kevin_Astro/Astronomy/HST_Gaia_PMs/GaiaHub_results/'
+            
 #            process_GH.collect_gaiahub_results(field,path=path,overwrite=True)
 #            continue
-            
+            max_stars = 500
+            max_stars = 1000
             if field in ['COSMOS_field']:
                 fit_population_pms = False
                 overwrite_GH_summaries = False
+                overwrite_previous = False
+            elif 'FAKE' in field:
+                fit_population_pms = False
+                overwrite_GH_summaries = False
+                max_stars = 1000*6
             else:
                 fit_population_pms = True
                 overwrite_GH_summaries = False
@@ -380,24 +426,180 @@ if __name__ == '__main__':
                                             overwrite_previous=overwrite_previous,
                                             overwrite_GH_summaries=overwrite_GH_summaries,
                                             thresh_time=thresh_time)
-            if individual_fit_only:
-                temp_list = []
-                for entry in linked_image_list:
-                    if len(entry) == 1:
-                        temp_list.append(entry)
-                linked_image_list = temp_list
+            orig_linked_image_list = linked_image_list
             
+            outpath = f'{path}{field}/Bayesian_PMs/'
+            trans_file_df = pd.read_csv(f'{outpath}gaiahub_image_transformation_summaries.csv')
+            trans_file_names = trans_file_df['image_name'].to_numpy()
+            trans_file_mjds = trans_file_df['HST_time'].to_numpy()
+            indv_list = []
+            indv_list_times = []
+            for entry in linked_image_list:
+                if len(entry) == 1:
+                    indv_list.append(entry)
+                    indv_list_times.append(trans_file_mjds[np.where(trans_file_names == entry)[0][0]])
+            
+            indv_list_array = np.array(indv_list)[:,0]
+            indv_list_times = np.array(indv_list_times)
+            
+            nearest_time_neighbour_inds = np.zeros(len(indv_list_times)).astype(int)
+            match_time_list = []
+            for j,mjd in enumerate(indv_list_times):
+                curr_time_diffs = np.abs(indv_list_times-mjd)
+                curr_time_diffs[j] = np.inf
+                nearest_time_neighbour_inds[j] = np.argmin(curr_time_diffs)
+                match_time_list.append([indv_list_array[j],indv_list_array[nearest_time_neighbour_inds[j]]])
+                
+#            group_times = []
+#            time_inds = np.zeros(len(indv_list_times)).astype(int)
+#            for j,mjd in enumerate(indv_list_times):
+#                if j == 0:
+#                    group_times.append(mjd)
+#                    time_inds[j] = 0
+#                    continue
+#                curr_times = np.array(group_times)
+#                curr_time_diffs = np.abs(curr_times-mjd)
+#                nearest_ind = np.argmin(curr_time_diffs)
+#                nearest_diff = curr_time_diffs[nearest_ind]
+#                if nearest_diff > 0.5:
+#                    #then add the new time to the list
+#                    time_inds[j] = len(group_times)
+#                    group_times.append(mjd)
+#                else:
+#                    time_inds[j] = nearest_ind
+#            group_times = np.array(group_times)
+#            match_time_list = []
+#            for time_ind in np.unique(time_inds):
+#                match_time_list.append(list(indv_list_array[np.where(time_inds == time_ind)[0]]))
+            
+            if individual_fit_only:
+                linked_image_list = indv_list
+            
+            if field == 'COSMOS_field':
+                #only list of nearby observation times
+#                linked_image_list = match_time_list
+                linked_image_list.extend(match_time_list)
+#            elif field == 'FAKE_ROMAN_01':
+#                #only list of nearby observation times
+#                linked_image_list = [
+#                        ['im01n180t092s101'],
+#                        ['im02n180t092s101'],
+#                        ['im03n180t092s101'],
+#                        ['im01n180t092s101','im02n180t092s101','im03n180t092s101'],
+#                        ]
+#            elif 'FAKE_FIELD' in field:
+#                #only list of nearby observation times
+#                linked_image_list = [
+#                        ['im01n180t092s101'],
+#                        ['im02n180t092s101'],
+#                        ['im03n180t092s101'],
+#                        ['im01n180t092s101','im02n180t092s101','im03n180t092s101'],
+#                        ]
             
             for entry_ind,entry in enumerate(linked_image_list):
                 print(f'\n\n\nCurrently on list number {entry_ind+1} of {len(linked_image_list)}.\n')
                 
 #                if entry_ind > 0:
 #                    overwrite_GH_summaries = False
-                
+#                if (field in ['M31']) and (entry_ind == 0):
+#                    overwrite_GH_summaries = True
+
                 #check if previous analysis exists
                 image_name = '_'.join(entry)
                 outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
-                                    
+                                
+#                if 'FAKE_FIELD' in field:
+#                    chosen_nstar = 200
+#                    chosen_nstar = 10
+#                    nstar_string = 'n%03d'%chosen_nstar
+#                    chosen_nstar2 = 5
+#                    nstar_string2 = 'n%03d'%chosen_nstar2
+#                    
+#                    chosen_nstar = 200
+#                    nstar_string = 'n%03d'%chosen_nstar
+#                    chosen_nstar2 = 150
+#                    nstar_string2 = 'n%03d'%chosen_nstar2
+#                    skip = True
+#                    if (nstar_string in image_name):
+#                        skip = False
+#                    elif (nstar_string2 in image_name):
+#                        skip = False
+#                    
+#                    curr_n_star = int(entry[0].split('n')[1][:3])
+#                    curr_dtime = float(entry[0].split('t')[1][:3])/10
+#                    curr_seed = int(entry[0].split('s')[1][:3])
+##                    if curr_n_star not in [200,150,100]:
+##                    if curr_n_star not in [5,10,15,20]:
+#                    if curr_n_star not in [10]:
+#                        skip = True
+#                    else:
+#                        skip = False
+#                    
+##                    if field in ['FAKE_FIELD_07']:
+##                        skip = False
+#                    
+#                    if skip:
+#                        print(f'SKIPPING fit of image {image_name} in {field} because it does not have the right number of sources.')
+#                        continue
+#                    
+#                    if curr_dtime not in [15]:
+#                        skip = True
+#                    else:
+#                        skip = False
+#                    
+#                    if field in ['FAKE_FIELD_07']:
+#                        skip = False
+#
+#                    if skip:
+#                        print(f'SKIPPING fit of image {image_name} in {field} because it does not have the right time offset.')
+#                        continue
+                    
+#                    if curr_seed not in np.arange(101,109+1e-10,1).astype(int):
+##                    if curr_seed not in [101]:
+#                        continue
+                
+                if field in ['FAKE_FIELD_06','FAKE_FIELD_05']:
+                    if ('im01' not in image_name):
+                        print(f'SKIPPING fit of image {image_name} in {field} because it is a copy of a previous analysis.')
+                        continue
+                    
+                overwrite_previous = False
+                if 'FAKE_ROMAN' in field:
+                    pass
+#                    chosen_seed = 102
+#                    seed_string = 's%03d'%chosen_seed
+#                    if seed_string not in image_name:
+#                        print(f'SKIPPING fit of image {image_name} in {field} because it does not have {chosen_seed} as a seed.')
+#                        continue
+#                    
+##                    if ('t088' in image_name) and (len(entry) == 1):
+##                        overwrite_previous = True
+##                    if ('t088' in image_name) and (len(entry) > 1):
+##                        overwrite_previous = True
+##                    if ('t089' in image_name) and (len(entry) == 1):
+##                        overwrite_previous = True
+##                    if ('t089' in image_name) and (len(entry) > 1):
+##                        overwrite_previous = True
+##                    if ('t091' in image_name) and (len(entry) == 1):
+##                        overwrite_previous = True
+##                    if ('t091' in image_name) and (len(entry) > 1):
+##                        overwrite_previous = True
+##                    if ('t085' in image_name) and (len(entry) == 1):
+##                        overwrite_previous = True
+##                    if ('t085' in image_name) and (len(entry) > 1):
+##                        overwrite_previous = True
+##                    if ('t087' in image_name) and (len(entry) == 1):
+##                        overwrite_previous = True
+#                    if ('t087' in image_name) and (len(entry) > 1):
+#                        overwrite_previous = True
+##                    if ('t093' in image_name) and (len(entry) == 1):
+##                        overwrite_previous = True
+#                    if ('t093' in image_name) and (len(entry) > 1):
+#                        overwrite_previous = True
+                        
+#                if field in ['FAKE_FIELD_07']:
+#                    overwrite_previous = True
+                        
                 final_file = f'{outpath}{image_name}{final_file_ext}'
                 if os.path.isfile(final_file):
                     file_time = os.path.getmtime(final_file)
@@ -432,4 +634,65 @@ if __name__ == '__main__':
                           f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {max_images} --n_processes {n_threads} "+\
                           f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}{pop_fit_string}{fit_all_hst_string}")
    
+            if field in ['Fornax_dSph','Sculptor_dSph','Draco_dSph']:
+                entry = orig_linked_image_list[-1]         
+                
+                if field == 'Sculptor_dSph':
+#                    entry = ['j8hofes6q','j8hofesaq','j8hoffsjq','j8hoffsoq','j8hofnt8q']
+                    entry = ['j8hofafuq','j8hofafyq','j8hof5gbq','j8hof5ghq','j8hof5gmq','j8hofigsq']
+                elif field == 'Draco_dSph':
+                    entry = ['j93404ebq','j93404ekq','j93404f1q','j93404fbq','j9qv04p3q','j9qv04pdq','j9qv04pnq','j9qv04pxq','jc2z01ekq','jc2z01feq']
+                    
+                max_im_nums = np.arange(2,min(10,len(entry))+1e-10,1).astype(int)
+#                max_im_nums[0] = max_im_nums[-1] #do the last first
+#                max_im_nums[-1] = 2
+                
+                for ind,curr_max_ims in enumerate(max_im_nums):
+                
+                    print(f'\n\n\nCurrently on list number {ind+1} of {len(max_im_nums)} using {curr_max_ims} max number of images.\n')
+                    
+    #                if entry_ind > 0:
+    #                    overwrite_GH_summaries = False
+    #                if (field in ['M31']) and (entry_ind == 0):
+    #                    overwrite_GH_summaries = True
+    
+                    #check if previous analysis exists
+                    image_name = '_'.join(entry)
+                    outpath = f'{path}{field}/Bayesian_PMs/{image_name}/'
+                                        
+                    final_file = f'{outpath}{image_name}{final_file_ext}'
+#                    if os.path.isfile(final_file):
+#                        file_time = os.path.getmtime(final_file)
+#                        if (file_time > thresh_time) and (not overwrite_previous):
+#                            print(f'SKIPPING fit of image {image_name} in {field} because it has recently been analysed.')
+#                            continue
+                    
+                    entry_list = ' '.join(entry)
+                    overwrite_previous_string = ''
+                    if overwrite_previous:
+                        overwrite_previous_string = '--overwrite '
+                    overwrite_GH_string = ''
+                    if overwrite_GH_summaries:
+                        overwrite_GH_string = '--overwrite_GH '
+                    repeat_string = ''
+                    if redo_without_outliers:
+                        repeat_string = '--repeat_first_fit '
+                    plot_string = ''
+                    if plot_indv_star_pms:
+                        plot_string = '--plot_indv_star_pms '
+                    pop_fit_string = ''
+                    if fit_population_pms:
+                        pop_fit_string = '--fit_population_pms '
+                    fit_all_hst_string = ''
+                    if fit_all_hst:
+                        fit_all_hst_string = '--fit_all_hst '
+                        
+                    #use os.system call so that each image set analysis is separate 
+                    #to prevent a creep of memory leak (probably from numpy) that 
+                    #uses up all the RAM and slows down the calculations significantly
+                    os.system(f"python {curr_scripts_dir}/GaiaHub_bayesian_pm_analysis_SINGLE.py --name {field} --path {path} --image_list {entry_list} "+\
+                              f"--max_iterations {n_fit_max} --max_sources {max_stars} --max_images {curr_max_ims} --n_processes {n_threads} "+\
+                              f"{overwrite_previous_string}{overwrite_GH_string}{repeat_string}{plot_string}{pop_fit_string}{fit_all_hst_string}")
+                
+    
         print(f'\n\nDone with field {field}\n\n\n')
