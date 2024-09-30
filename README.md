@@ -1,4 +1,4 @@
-# BayesianPMs
+# BP3M (Bayesian Positions, Parallaxes, and Proper Motions)
 Use the outputs from [GaiaHub](https://github.com/AndresdPM/GaiaHub/) (see also [del Pino et al. 2022](https://ui.adsabs.harvard.edu/abs/2022ApJ...933...76D/abstract/)) to measure proper motions, parallaxes, and positions in a heirarchical Bayesian framework from Gaia and archival Hubble images.
 
 Works best for sources in the 18 < G < 21.5 mag range in medium- to low-density environemnts, though most of the improvement is seen for the faintest targets. High-density environments are likely to have incorrect cross-matching between Gaia and Hubble sources. 
